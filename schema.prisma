@@ -1,0 +1,576 @@
+// VSM Backend – Prisma Schema
+// Maps all tables to Supabase PostgreSQL
+// Uses prisma-client-py for async Python access
+
+generator client {
+  provider             = "prisma-client-py"
+  interface            = "asyncio"
+  recursive_type_depth = 5
+}
+
+datasource db {
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")       // Supabase pooled connection (pgbouncer)
+  directUrl = env("DIRECT_URL")         // Supabase direct connection (for migrations)
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// ENUMS
+// ─────────────────────────────────────────────────────────────────────────────
+
+enum TaskStatusCategory {
+  BACKLOG
+  ACTIVE
+  REVIEW
+  VALIDATION
+  DONE
+  BLOCKED
+}
+
+enum SprintStatus {
+  PLANNED
+  ACTIVE
+  COMPLETED
+}
+
+enum ConditionType {
+  PR_CREATED
+  PR_MERGED
+  CI_PASSED
+  CI_FAILED
+  COMMENT_ADDED
+  QA_APPROVED
+  DOCS_UPDATED
+  SECURITY_SCAN_PASSED
+}
+
+enum ConditionOperator {
+  AND
+  OR
+}
+
+enum EventType {
+  GIT_COMMIT
+  PR_CREATED
+  PR_MERGED
+  CI_STATUS
+  CHAT_MESSAGE
+}
+
+enum EventSource {
+  GITHUB
+  SLACK
+  CI
+  SYSTEM
+}
+
+enum QueueStatus {
+  PENDING
+  PROCESSING
+  COMPLETED
+  FAILED
+}
+
+enum WindowStatus {
+  OPEN
+  CLOSED
+}
+
+enum ActivityType {
+  COMMIT
+  PR
+  CI
+  COMMENT
+}
+
+enum UnlinkedActivityType {
+  COMMIT
+  PR
+}
+
+enum UnlinkedActivityStatus {
+  UNRESOLVED
+  AUTO_LINKED
+  USER_CONFIRMED
+  IGNORED
+}
+
+enum DetectedIntent {
+  BLOCKER
+  PROGRESS
+  COMPLETION
+  CONFUSION
+}
+
+enum FeedbackResult {
+  ACCEPTED
+  REJECTED
+}
+
+enum CorrectedIntent {
+  BLOCKER
+  PROGRESS
+  NONE
+}
+
+enum MappingMethod {
+  MANUAL
+  AI_AUTO
+  BRANCH_PATTERN
+}
+
+enum DecisionSource {
+  RULE_ENGINE
+  AI_MODEL
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// CORE ENTITIES (RBAC)
+// ─────────────────────────────────────────────────────────────────────────────
+
+model User {
+  id        BigInt       @id @default(autoincrement())
+  email     String       @unique @db.VarChar(255)
+  name      String       @db.VarChar(255)
+  createdAt DateTime     @default(now())
+  updatedAt DateTime     @updatedAt
+
+  memberships       TeamMember[]
+  invitationsSent   TeamInvitation[] @relation("InvitationsSent")
+  chatMessages      ChatMessage[]
+  nlpFeedbacks      NLPFeedback[]
+  decisionFeedbacks DecisionFeedback[]
+  unlinkedActivities UnlinkedActivity[]
+
+  @@map("users")
+}
+
+model Permission {
+  id          BigInt   @id @default(autoincrement())
+  code        String   @unique @db.VarChar(100)
+  description String?  @db.VarChar(255)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  rolePermissions RolePermission[]
+
+  @@map("permissions")
+}
+
+model Project {
+  id        BigInt   @id @default(autoincrement())
+  name      String   @db.VarChar(255)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  teams Team[]
+
+  @@map("projects")
+}
+
+model Team {
+  id        BigInt   @id @default(autoincrement())
+  projectId BigInt
+  name      String   @db.VarChar(255)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  project             Project              @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  roles               TeamRole[]
+  members             TeamMember[]
+  invitations         TeamInvitation[]
+  sprints             Sprint[]
+  tasks               Task[]
+  taskStatuses        TaskStatus[]
+  workflowTransitions WorkflowTransition[]
+  chatMessages        ChatMessage[]
+
+  @@index([projectId])
+  @@map("teams")
+}
+
+model TeamRole {
+  id          BigInt       @id @default(autoincrement())
+  teamId      BigInt
+  name        String       @db.VarChar(100)
+  createdAt   DateTime     @default(now())
+  updatedAt   DateTime     @updatedAt
+
+  team    Team         @relation(fields: [teamId], references: [id], onDelete: Cascade)
+  members TeamMember[]
+  rolePermissions RolePermission[]
+  invitations     TeamInvitation[]
+
+  @@unique([teamId, name])
+  @@index([teamId])
+  @@map("team_roles")
+}
+
+model RolePermission {
+  id           BigInt   @id @default(autoincrement())
+  roleId       BigInt
+  permissionId BigInt
+  createdAt    DateTime @default(now())
+
+  role       TeamRole    @relation(fields: [roleId], references: [id], onDelete: Cascade)
+  permission Permission  @relation(fields: [permissionId], references: [id], onDelete: Cascade)
+
+  @@unique([roleId, permissionId])
+  @@index([roleId])
+  @@index([permissionId])
+  @@map("role_permissions")
+}
+
+model TeamMember {
+  id        BigInt   @id @default(autoincrement())
+  teamId    BigInt
+  userId    BigInt
+  roleId    BigInt
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  team   Team       @relation(fields: [teamId], references: [id], onDelete: Cascade)
+  user   User       @relation(fields: [userId], references: [id], onDelete: Cascade)
+  role   TeamRole   @relation(fields: [roleId], references: [id], onDelete: Restrict)
+  tasks  Task[]
+
+  @@unique([teamId, userId])
+  @@index([userId])
+  @@index([teamId])
+  @@map("team_members")
+}
+
+model TeamInvitation {
+  id          BigInt   @id @default(autoincrement())
+  teamId      BigInt
+  email       String   @db.VarChar(255)
+  roleId      BigInt
+  invitedById BigInt?
+  acceptedAt  DateTime?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  team      Team      @relation(fields: [teamId], references: [id], onDelete: Cascade)
+  role      TeamRole  @relation(fields: [roleId], references: [id], onDelete: Restrict)
+  invitedBy User?     @relation("InvitationsSent", fields: [invitedById], references: [id], onDelete: SetNull)
+
+  @@unique([teamId, email])
+  @@index([teamId])
+  @@index([roleId])
+  @@map("team_invitations")
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// WORKFLOW & TASKS
+// ─────────────────────────────────────────────────────────────────────────────
+
+model Sprint {
+  id        BigInt       @id @default(autoincrement())
+  teamId    BigInt
+  name      String       @db.VarChar(255)
+  goal      String?
+  startDate DateTime?
+  endDate   DateTime?
+  status    SprintStatus @default(PLANNED)
+  createdAt DateTime     @default(now())
+  updatedAt DateTime     @updatedAt
+
+  team  Team   @relation(fields: [teamId], references: [id], onDelete: Cascade)
+  tasks Task[]
+
+  @@index([teamId])
+  @@index([status])
+  @@map("sprints")
+}
+
+model TaskStatus {
+  id             BigInt             @id @default(autoincrement())
+  teamId         BigInt
+  name           String             @db.VarChar(100)
+  category       TaskStatusCategory
+  stageOrder     Int                @default(0)
+  isTerminal     Boolean            @default(false)
+  createdAt      DateTime           @default(now())
+  updatedAt      DateTime           @updatedAt
+
+  team            Team                 @relation(fields: [teamId], references: [id], onDelete: Cascade)
+  tasks           Task[]
+  fromTransitions WorkflowTransition[] @relation("FromStatus")
+  toTransitions   WorkflowTransition[] @relation("ToStatus")
+
+  @@unique([teamId, name])
+  @@index([teamId])
+  @@map("task_status")
+}
+
+model Task {
+  id              BigInt      @id @default(autoincrement())
+  teamId          BigInt
+  sprintId        BigInt?
+  title           String      @db.VarChar(500)
+  description     String?
+  currentStatusId BigInt?
+  assigneeId      BigInt?
+  createdAt       DateTime    @default(now())
+  updatedAt       DateTime    @updatedAt
+
+  team          Team            @relation(fields: [teamId], references: [id], onDelete: Cascade)
+  sprint        Sprint?         @relation(fields: [sprintId], references: [id], onDelete: SetNull)
+  currentStatus TaskStatus?     @relation(fields: [currentStatusId], references: [id])
+  assignee      TeamMember?     @relation(fields: [assigneeId], references: [id])
+  activities    TaskActivity[]
+  decisions     AgentDecision[]
+  nlpInsights   NLPInsight[]
+
+  @@index([teamId])
+  @@index([assigneeId])
+  @@map("tasks")
+}
+
+model WorkflowTransition {
+  id                     BigInt             @id @default(autoincrement())
+  teamId                 BigInt
+  fromStatusId           BigInt
+  toStatusId             BigInt
+  fromCategory           TaskStatusCategory
+  toCategory             TaskStatusCategory
+  priority               Int                @default(1)
+  requiresManualApproval Boolean            @default(false)
+  createdAt              DateTime           @default(now())
+  updatedAt              DateTime           @updatedAt
+
+  team        Team                 @relation(fields: [teamId], references: [id], onDelete: Cascade)
+  fromStatus  TaskStatus           @relation("FromStatus", fields: [fromStatusId], references: [id])
+  toStatus    TaskStatus           @relation("ToStatus", fields: [toStatusId], references: [id])
+  conditions  TransitionCondition[]
+
+  @@index([teamId])
+  @@index([fromStatusId])
+  @@map("workflow_transitions")
+}
+
+model TransitionCondition {
+  id             BigInt            @id @default(autoincrement())
+  transitionId   BigInt
+  conditionType  ConditionType
+  operator       ConditionOperator @default(AND)
+  expectedValue  String?           @db.VarChar(50)
+  createdAt      DateTime          @default(now())
+  updatedAt      DateTime          @updatedAt
+
+  transition WorkflowTransition @relation(fields: [transitionId], references: [id], onDelete: Cascade)
+
+  @@index([transitionId])
+  @@map("transition_conditions")
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// EVENT SYSTEM
+// ─────────────────────────────────────────────────────────────────────────────
+
+model EventLog {
+  id                 BigInt      @id @default(autoincrement())
+  eventType          EventType
+  source             EventSource
+  referenceId        String?     @db.VarChar(255)
+  payload            Json
+  eventTimestamp     DateTime
+  ingestionTimestamp DateTime    @default(now())
+  processed          Boolean     @default(false)
+  correlationId      String?     @db.VarChar(255)
+  createdAt          DateTime    @default(now())
+  updatedAt          DateTime    @updatedAt
+
+  queueEntry EventProcessingQueue?
+
+  @@index([eventType, eventTimestamp])
+  @@index([processed])
+  @@index([correlationId])
+  @@map("event_log")
+}
+
+model EventProcessingQueue {
+  id           BigInt      @id @default(autoincrement())
+  eventId      BigInt      @unique
+  status       QueueStatus @default(PENDING)
+  retryCount   Int         @default(0)
+  scheduledAt  DateTime?
+  errorMessage String?
+  createdAt    DateTime    @default(now())
+  updatedAt    DateTime    @updatedAt
+
+  event EventLog @relation(fields: [eventId], references: [id], onDelete: Cascade)
+
+  @@index([status])
+  @@map("event_processing_queue")
+}
+
+model EventAggregationWindow {
+  id                BigInt       @id @default(autoincrement())
+  correlationId     String       @db.VarChar(255)
+  startTime         DateTime
+  endTime           DateTime?
+  aggregatedEvents  Json         
+  status            WindowStatus @default(OPEN)
+  createdAt         DateTime     @default(now())
+  updatedAt         DateTime     @updatedAt
+
+  @@index([correlationId])
+  @@index([status])
+  @@map("event_aggregation_window")
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// GITHUB + UNLINKED ACTIVITY 
+// ─────────────────────────────────────────────────────────────────────────────
+
+model TaskActivity {
+  id           BigInt       @id @default(autoincrement())
+  taskId       BigInt?
+  activityType ActivityType
+  referenceId  String?      @db.VarChar(255)
+  metadata     Json         @default("{}")
+  eventLogId   BigInt?
+  createdAt    DateTime     @default(now())
+  updatedAt    DateTime     @updatedAt
+
+  task Task? @relation(fields: [taskId], references: [id], onDelete: SetNull)
+
+  @@index([taskId])
+  @@index([activityType])
+  @@map("task_activity")
+}
+
+model UnlinkedActivity {
+  id              BigInt                 @id @default(autoincrement())
+  activityType    UnlinkedActivityType
+  referenceId     String?                @db.VarChar(255)
+  branchName      String?                @db.VarChar(255)
+  commitMessage   String?
+  authorId        BigInt?
+  suggestedTaskId BigInt?
+  confidenceScore Float?
+  status          UnlinkedActivityStatus @default(UNRESOLVED)
+  createdAt       DateTime               @default(now())
+  updatedAt       DateTime               @updatedAt
+
+  author     User?                    @relation(fields: [authorId], references: [id])
+  mappingLog ActivityTaskMappingLog[]
+
+  @@index([status])
+  @@index([branchName])
+  @@index([authorId])
+  @@map("unlinked_activity")
+}
+
+model ActivityTaskMappingLog {
+  id              BigInt        @id @default(autoincrement())
+  activityId      BigInt
+  taskId          BigInt
+  mappingMethod   MappingMethod
+  confidenceScore Float?
+  createdAt       DateTime      @default(now())
+  updatedAt       DateTime      @updatedAt
+
+  activity UnlinkedActivity @relation(fields: [activityId], references: [id], onDelete: Cascade)
+
+  @@index([activityId])
+  @@index([taskId])
+  @@map("activity_task_mapping_log")
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// NLP SYSTEM 
+// ─────────────────────────────────────────────────────────────────────────────
+
+model ChatMessage {
+  id                BigInt     @id @default(autoincrement())
+  userId            BigInt
+  teamId            BigInt
+  message           String
+  timestamp         DateTime
+  platformMessageId String?    @unique @db.VarChar(255)
+  createdAt         DateTime   @default(now())
+  updatedAt         DateTime   @updatedAt
+
+  user     User         @relation(fields: [userId], references: [id])
+  team     Team         @relation(fields: [teamId], references: [id])
+  insights NLPInsight[]
+
+  @@index([userId])
+  @@index([teamId])
+  @@map("chat_messages")
+}
+
+model NLPInsight {
+  id                   BigInt         @id @default(autoincrement())
+  messageId            BigInt
+  taskId               BigInt?
+  detectedIntent       DetectedIntent
+  confidenceScore      Float
+  requiresConfirmation Boolean        @default(false)
+  contextSnapshot      Json           @default("{}")
+  createdAt            DateTime       @default(now())
+  updatedAt            DateTime       @updatedAt
+
+  message  ChatMessage   @relation(fields: [messageId], references: [id], onDelete: Cascade)
+  task     Task?         @relation(fields: [taskId], references: [id], onDelete: SetNull)
+  feedback NLPFeedback[]
+
+  @@index([confidenceScore])
+  @@index([taskId])
+  @@map("nlp_insights")
+}
+
+model NLPFeedback {
+  id               BigInt          @id @default(autoincrement())
+  insightId        BigInt
+  userId           BigInt
+  feedback         FeedbackResult
+  correctedIntent  CorrectedIntent?
+  createdAt        DateTime        @default(now())
+  updatedAt        DateTime        @updatedAt
+
+  insight NLPInsight @relation(fields: [insightId], references: [id], onDelete: Cascade)
+  user    User       @relation(fields: [userId], references: [id])
+
+  @@index([insightId])
+  @@map("nlp_feedback")
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// AI DECISION TRACEABILITY 
+// ─────────────────────────────────────────────────────────────────────────────
+
+model AgentDecision {
+  id              BigInt         @id @default(autoincrement())
+  taskId          BigInt
+  actionTaken     String         @db.VarChar(255)
+  reason          String
+  confidenceScore Float
+  inputSignals    Json           @default("{}")
+  decisionSource  DecisionSource
+  createdAt       DateTime       @default(now())
+  updatedAt       DateTime       @updatedAt
+
+  task     Task               @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  feedback DecisionFeedback[]
+
+  @@index([taskId])
+  @@map("agent_decisions")
+}
+
+model DecisionFeedback {
+  id         BigInt         @id @default(autoincrement())
+  decisionId BigInt
+  userId     BigInt
+  feedback   FeedbackResult
+  createdAt  DateTime       @default(now())
+  updatedAt  DateTime       @updatedAt
+
+  decision AgentDecision @relation(fields: [decisionId], references: [id], onDelete: Cascade)
+  user     User          @relation(fields: [userId], references: [id])
+
+  @@index([decisionId])
+  @@map("decision_feedback")
+}

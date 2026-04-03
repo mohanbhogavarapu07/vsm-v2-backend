@@ -1,0 +1,261 @@
+from prisma import Prisma
+from datetime import datetime, timezone
+
+
+class RBACRepository:
+    def __init__(self, db: Prisma):
+        self.db = db
+
+    # ── Projects ──────────────────────────────────────────────────────────────
+
+    async def create_project(self, name: str):
+        return await self.db.project.create(data={"name": name})
+
+    async def get_project(self, project_id: int):
+        return await self.db.project.find_unique(
+            where={"id": project_id},
+            include={"teams": True},
+        )
+
+    async def list_projects(self):
+        return await self.db.project.find_many(order={"createdAt": "desc"})
+
+    # ── Teams ─────────────────────────────────────────────────────────────────
+
+    async def create_team(self, project_id: int, name: str):
+        return await self.db.team.create(
+            data={"projectId": project_id, "name": name}
+        )
+
+    async def get_team(self, team_id: int):
+        return await self.db.team.find_unique(where={"id": team_id})
+
+    async def list_teams_by_project(self, project_id: int):
+        return await self.db.team.find_many(
+            where={"projectId": project_id},
+            order={"createdAt": "asc"},
+        )
+
+    # ── Roles ─────────────────────────────────────────────────────────────────
+
+    async def create_role(self, team_id: int, name: str):
+        return await self.db.teamrole.create(data={"teamId": team_id, "name": name})
+
+    async def get_role_by_id(self, role_id: int):
+        return await self.db.teamrole.find_unique(where={"id": role_id})
+
+    async def get_roles_by_team(self, team_id: int):
+        return await self.db.teamrole.find_many(
+            where={"teamId": team_id},
+            order={"name": "asc"},
+        )
+
+    async def update_role(self, role_id: int, name: str | None):
+        data = {}
+        if name is not None:
+            data["name"] = name
+        return await self.db.teamrole.update(where={"id": role_id}, data=data)
+
+    async def delete_role(self, role_id: int):
+        return await self.db.teamrole.delete(where={"id": role_id})
+
+    # ── Permissions / Role-Permissions ────────────────────────────────────────
+
+    async def list_permissions(self) -> list:
+        return await self.db.permission.find_many(order={"code": "asc"})
+
+    async def get_permissions_by_codes(self, codes: list[str]) -> list:
+        if not codes:
+            return []
+        return await self.db.permission.find_many(where={"code": {"in": codes}})
+
+    async def replace_role_permissions(self, role_id: int, permission_ids: list[int]) -> None:
+        """
+        Replace the permissions assigned to a role. Implemented as:
+          - delete existing RolePermission rows for role
+          - bulk insert new rows
+        """
+        async with self.db.tx() as tx:
+            await tx.rolepermission.delete_many(where={"roleId": role_id})
+            if permission_ids:
+                await tx.rolepermission.create_many(
+                    data=[{"roleId": role_id, "permissionId": pid} for pid in permission_ids]
+                )
+
+    async def get_role_permission_codes(self, role_id: int) -> list[str]:
+        rows = await self.db.rolepermission.find_many(
+            where={"roleId": role_id},
+            include={"permission": True},
+        )
+        return [r.permission.code for r in rows if getattr(r, "permission", None)]
+
+    async def get_team_role_with_permissions(self, role_id: int):
+        return await self.db.teamrole.find_unique(
+            where={"id": role_id},
+            include={"rolePermissions": {"include": {"permission": True}}},
+        )
+
+    # ── Users ─────────────────────────────────────────────────────────────────
+
+    async def get_user_by_email(self, email: str):
+        return await self.db.user.find_unique(where={"email": email})
+
+    async def get_user_by_id(self, user_id: int):
+        return await self.db.user.find_unique(where={"id": user_id})
+
+    async def create_user(self, email: str, name: str):
+        return await self.db.user.create(data={"email": email, "name": name})
+
+    async def update_user_name(self, user_id: int, name: str):
+        return await self.db.user.update(where={"id": user_id}, data={"name": name})
+
+    # ── Team Members ──────────────────────────────────────────────────────────
+
+    async def create_team_member(self, team_id: int, user_id: int, role_id: int):
+        return await self.db.teammember.create(
+            data={"teamId": team_id, "userId": user_id, "roleId": role_id}
+        )
+
+    async def get_team_members(self, team_id: int):
+        return await self.db.teammember.find_many(
+            where={"teamId": team_id},
+            include={"user": True, "role": True},
+        )
+
+    async def get_member_by_user_team(self, user_id: int, team_id: int):
+        return await self.db.teammember.find_first(
+            where={"userId": user_id, "teamId": team_id},
+            include={"role": True},
+        )
+
+    async def update_member_role(self, member_id: int, role_id: int):
+        return await self.db.teammember.update(
+            where={"id": member_id},
+            data={"roleId": role_id},
+            include={"role": True, "user": True},
+        )
+
+    async def remove_team_member(self, member_id: int):
+        return await self.db.teammember.delete(where={"id": member_id})
+
+    # ── Invitations ───────────────────────────────────────────────────────────
+
+    async def create_invitation(
+        self,
+        team_id: int,
+        email: str,
+        role_id: int,
+        invited_by_id: int | None,
+    ):
+        return await self.db.teaminvitation.create(
+            data={
+                "teamId": team_id,
+                "email": email,
+                "roleId": role_id,
+                "invitedById": invited_by_id,
+            }
+        )
+
+    async def get_invitation_by_id(self, invitation_id: int):
+        return await self.db.teaminvitation.find_unique(where={"id": invitation_id})
+
+    async def get_invitation_by_team_email(self, team_id: int, email: str):
+        return await self.db.teaminvitation.find_unique(
+            where={"teamId_email": {"teamId": team_id, "email": email}}
+        )
+
+    async def mark_invitation_accepted(self, invitation_id: int):
+        return await self.db.teaminvitation.update(
+            where={"id": invitation_id},
+            data={"acceptedAt": datetime.now(timezone.utc)},
+        )
+
+    # ── Workflow: TaskStatus ───────────────────────────────────────────────────
+
+    async def create_task_status(
+        self,
+        team_id: int,
+        name: str,
+        category: str,
+        stage_order: int,
+        is_terminal: bool = False,
+    ):
+        return await self.db.taskstatus.create(
+            data={
+                "teamId": team_id,
+                "name": name,
+                "category": category,
+                "stageOrder": stage_order,
+                "isTerminal": is_terminal,
+            }
+        )
+
+    async def list_task_statuses(self, team_id: int):
+        return await self.db.taskstatus.find_many(
+            where={"teamId": team_id},
+            order={"stageOrder": "asc"},
+        )
+
+    async def get_task_status_by_id(self, status_id: int):
+        return await self.db.taskstatus.find_unique(where={"id": status_id})
+
+    async def update_task_status(
+        self, status_id: int, name: str | None, stage_order: int | None, is_terminal: bool | None
+    ):
+        data = {}
+        if name is not None:
+            data["name"] = name
+        if stage_order is not None:
+            data["stageOrder"] = stage_order
+        if is_terminal is not None:
+            data["isTerminal"] = is_terminal
+        return await self.db.taskstatus.update(where={"id": status_id}, data=data)
+
+    async def delete_task_status(self, status_id: int):
+        return await self.db.taskstatus.delete(where={"id": status_id})
+
+    # ── Workflow: Transitions ─────────────────────────────────────────────────
+
+    async def create_workflow_transition(
+        self,
+        team_id: int,
+        from_status_id: int,
+        to_status_id: int,
+        from_category: str,
+        to_category: str,
+        requires_manual_approval: bool = False,
+    ):
+        return await self.db.workflowtransition.create(
+            data={
+                "teamId": team_id,
+                "fromStatusId": from_status_id,
+                "toStatusId": to_status_id,
+                "fromCategory": from_category,
+                "toCategory": to_category,
+                "requiresManualApproval": requires_manual_approval,
+            }
+        )
+
+    async def list_workflow_transitions(self, team_id: int):
+        return await self.db.workflowtransition.find_many(
+            where={"teamId": team_id},
+            include={"fromStatus": True, "toStatus": True},
+            order={"priority": "desc"},
+        )
+
+    async def delete_workflow_transition(self, transition_id: int):
+        return await self.db.workflowtransition.delete(where={"id": transition_id})
+
+    # ── Permission Lookup (for middleware) ────────────────────────────────────
+
+    async def get_user_permissions(self, user_id: int, team_id: int) -> list[str]:
+        member = await self.db.teammember.find_first(
+            where={"userId": user_id, "teamId": team_id},
+        )
+        if not member:
+            return []
+        rows = await self.db.rolepermission.find_many(
+            where={"roleId": member.roleId},
+            include={"permission": True},
+        )
+        return [r.permission.code for r in rows if getattr(r, "permission", None)]
