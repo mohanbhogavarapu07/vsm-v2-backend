@@ -155,9 +155,9 @@ class RBACService:
         inv = await self.repo.create_invitation(team_id, email, role_id, invited_by_user_id)
         
         logger = logging.getLogger(__name__)
-        logger.info(f"Invitation {inv.id} created for {email}. Triggering email via Resend...")
+        logger.info(f"Invitation {inv.id} created for {email}. Triggering email via SMTP...")
 
-        # ── Trigger Asynchronous Invitation Email (Resend HTTP) ───────────────
+        # ── Trigger Asynchronous Invitation Email (Gmail SMTP) ─────────────────
         try:
             from app.services.mail_service import MailService
             

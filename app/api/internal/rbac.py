@@ -385,6 +385,32 @@ async def invite_user(
         "role_id": invitation.roleId,
     }
 
+@router.get(
+    "/invitations/{invitation_id}",
+    summary="Get invitation details (team name, role, inviter) for the landing page",
+)
+async def get_invitation_details(
+    invitation_id: int = Path(...),
+    db: Prisma = Depends(get_db),
+):
+    svc = RBACService(db)
+    inv = await svc.repo.get_invitation_by_id(invitation_id)
+    if not inv:
+        raise HTTPException(status_code=404, detail="Invitation not found")
+    
+    team = await svc.repo.get_team(inv.teamId)
+    role = await svc.repo.get_role_by_id(inv.roleId)
+    inviter = await svc.repo.get_user_by_id(inv.invitedById) if inv.invitedById else None
+
+    return {
+        "invitation_id": inv.id,
+        "team_id": inv.teamId,
+        "team_name": team.name if team else "Unknown Team",
+        "role_name": role.name if role else "Member",
+        "inviter_name": inviter.name if inviter else "A team member",
+        "email": inv.email,
+        "accepted_at": inv.acceptedAt,
+    }
 
 @router.post(
     "/teams/{team_id}/invitations/accept",

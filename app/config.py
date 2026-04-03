@@ -11,6 +11,7 @@ class Settings(BaseSettings):
         env_file=".env",
         env_file_encoding="utf-8",
         case_sensitive=False,
+        extra="ignore",
     )
 
     # ── Application ──────────────────────────────────────────────────────────
@@ -23,8 +24,8 @@ class Settings(BaseSettings):
     # ── Supabase / Prisma ─────────────────────────────────────────────────────
     # DATABASE_URL  → Supabase pooled connection (used by the app)
     # DIRECT_URL    → Supabase direct connection (used by `prisma db push`)
-    database_url: str = "postgresql://postgres:[PASSWORD]@db.[PROJECT].supabase.co:5432/postgres?sslmode=require"
-    direct_url: str = "postgresql://postgres:[PASSWORD]@db.[PROJECT].supabase.co:5432/postgres?sslmode=require"
+    database_url: str | None = None
+    direct_url: str | None = None
 
     # ── Redis (Celery broker + result backend) ────────────────────────────────
     redis_url: str = "redis://localhost:6379/0"
@@ -40,7 +41,7 @@ class Settings(BaseSettings):
     ai_agent_timeout: int = 30
 
     # ── Webhook Security ──────────────────────────────────────────────────────
-    github_webhook_secret: str = "change_me_github_secret"
+    github_webhook_secret: str | None = None
     webhook_hmac_enabled: bool = True
 
     # ── Backend URL (for workers calling API) ─────────────────────────────────
@@ -54,9 +55,12 @@ class Settings(BaseSettings):
     celery_task_max_retries: int = 3
     celery_task_retry_backoff: int = 5
 
-    # ── Email Settings (Resend.com) ───────────────────────────────────────────
-    resend_api_key: str | None = None
-    resend_from: str = "onboarding@resend.dev"  # Default for unverified domains
+    # ── Email Settings (Gmail SMTP) ───────────────────────────────────────────
+    smtp_server: str = "smtp.gmail.com"
+    smtp_port: int = 587
+    smtp_user: str | None = None
+    smtp_password: str | None = None
+    smtp_from: str = "onboarding@vsm.dev"
     
     # ── Frontend Settings ─────────────────────────────────────────────────────
     frontend_url: str = "http://localhost:8080"

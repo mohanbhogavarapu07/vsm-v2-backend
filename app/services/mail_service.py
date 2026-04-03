@@ -1,24 +1,26 @@
 """
-VSM Backend – Mail Service (Resend Implementation)
+VSM Backend – Mail Service (Gmail SMTP Implementation)
 
-Provides reliable email delivery using the Resend.com HTTP API.
-Bypasses ISP SMTP blocks and eliminates the need for manual handshake logic.
+Provides reliable email delivery using Gmail's SMTP server via the built-in `smtplib`.
 """
 import logging
-import resend
+import smtplib
+import ssl
+from email.mime.text import MIMEText
+from email.mime.multipart import MIMEMultipart
 from app.config import get_settings
 
 logger = logging.getLogger(__name__)
 settings = get_settings()
 
-if settings.resend_api_key:
-    resend.api_key = settings.resend_api_key
-
-
 class MailService:
     def __init__(self):
-        self.api_key = settings.resend_api_key
-        self.sender = settings.resend_from or "onboarding@resend.dev"
+        self.smtp_server = settings.smtp_server.strip() if settings.smtp_server else "smtp.gmail.com"
+        self.smtp_port = settings.smtp_port
+        self.smtp_user = settings.smtp_user.strip() if settings.smtp_user else None
+        self.smtp_password = settings.smtp_password.strip() if settings.smtp_password else None
+        # Gmail strictness: The 'From' address must match the login user or it will fail
+        self.sender = self.smtp_user if "gmail.com" in (self.smtp_user or "") else (settings.smtp_from or self.smtp_user)
 
     async def send_invitation_email(
         self,
@@ -29,12 +31,11 @@ class MailService:
         invitation_id: int
     ):
         """
-        Sends an invitation email using the Resend HTTP API.
+        Sends an invitation email using the Gmail SMTP server.
         """
-        if not self.api_key or self.api_key == "re_your_api_key_here":
-            logger.warning("--- MOCK EMAIL (NO RESEND API KEY) ---")
+        if not self.smtp_user or not self.smtp_password:
+            logger.warning("--- MOCK EMAIL (NO SMTP CREDENTIALS) ---")
             logger.warning(f"To: {to_email}")
-            logger.warning(f"Invite: {settings.frontend_url}/accept-invite/{invitation_id}")
             return True
 
         subject = f"You've been invited to join {team_name} on VSM"
@@ -77,17 +78,40 @@ class MailService:
         </html>
         """
 
+        message = MIMEMultipart("alternative")
+        message["Subject"] = subject
+        message["From"] = f"VSM <{self.sender}>"
+        message["To"] = to_email
+
+        text_content = f"You've been invited to join {team_name} on VSM as a {role_name}. Accept here: {accept_url}"
+        message.attach(MIMEText(text_content, "plain"))
+        message.attach(MIMEText(html_content, "html"))
+
         try:
-            logger.info(f"Sending Resend email to {to_email}...")
-            # Note: resend-python is currently sync.
-            resend.Emails.send({
-                "from": f"VSM <{self.sender}>",
-                "to": to_email,
-                "subject": subject,
-                "html": html_content
-            })
-            logger.info(f"Successfully sent Resend email to {to_email}")
+            logger.info(f"Connecting to SMTP server {self.smtp_server}:{self.smtp_port}...")
+            context = ssl.create_default_context()
+            
+            # Use threading to avoid blocking the event loop since smtplib is synchronous
+            import asyncio
+            from functools import partial
+
+            def _send():
+                # For Gmail, port 465 is SSL, 587 is STARTTLS
+                if self.smtp_port == 465:
+                    with smtplib.SMTP_SSL(self.smtp_server, self.smtp_port, context=context) as server:
+                        server.login(self.smtp_user, self.smtp_password)
+                        server.sendmail(self.sender, to_email, message.as_string())
+                else:
+                    with smtplib.SMTP(self.smtp_server, self.smtp_port) as server:
+                        server.ehlo()
+                        server.starttls(context=context)
+                        server.ehlo()
+                        server.login(self.smtp_user, self.smtp_password)
+                        server.sendmail(self.sender, to_email, message.as_string())
+
+            await asyncio.get_event_loop().run_in_executor(None, _send)
+            logger.info(f"Successfully sent SMTP email to {to_email}")
             return True
         except Exception as e:
-            logger.error(f"Resend API error: {e}")
+            logger.error(f"SMTP error: {e}")
             raise e
