@@ -22,8 +22,8 @@ class RBACService:
     async def create_project(self, name: str):
         return await self.repo.create_project(name)
 
-    async def list_projects(self):
-        return await self.repo.list_projects()
+    async def list_projects(self, user_id: int | None = None):
+        return await self.repo.list_projects(user_id)
 
     async def get_project(self, project_id: int):
         project = await self.repo.get_project(project_id)
@@ -33,11 +33,13 @@ class RBACService:
 
     # ── Teams ─────────────────────────────────────────────────────────────────
 
-    async def create_team(self, project_id: int, name: str, creator_user_id: int | None = None):
+    async def create_team(self, project_id: int, name: str, creator_user_id: int | None = None, copy_from_team_id: int | None = None):
         await self.get_project(project_id)  # validates project exists
         team = await self.repo.create_team(project_id, name)
         
-        if creator_user_id:
+        if copy_from_team_id:
+            await self.repo.copy_team_config(copy_from_team_id, team.id, creator_user_id)
+        elif creator_user_id:
             # Provide an automatic "Admin" role on creation so creator has permissions
             admin_role = await self.repo.create_role(team.id, "Admin")
             all_perms = await self.repo.list_permissions()
@@ -46,6 +48,10 @@ class RBACService:
             await self.repo.create_team_member(team.id, creator_user_id, admin_role.id)
             
         return team
+
+    async def update_team(self, team_id: int, name: str | None):
+        await self.get_team(team_id)
+        return await self.repo.update_team(team_id, name)
 
     async def get_team(self, team_id: int):
         team = await self.repo.get_team(team_id)
