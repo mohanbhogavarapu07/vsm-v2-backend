@@ -24,6 +24,10 @@ class ProjectResponse(BaseModel):
 
 class TeamCreateRequest(BaseModel):
     name: str
+    copy_from_team_id: Optional[int] = None
+
+class TeamUpdateRequest(BaseModel):
+    name: Optional[str] = None
 
 class TeamResponse(BaseModel):
     id: int
