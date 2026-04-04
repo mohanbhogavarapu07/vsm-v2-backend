@@ -26,6 +26,7 @@ from app.schemas.rbac_schemas import (
     TeamCreateRequest, TeamUpdateRequest, TeamResponse,
     RoleCreateRequest, RoleUpdateRequest, RoleResponse,
     UserInviteRequest, InvitationAcceptRequest, MemberRoleUpdateRequest, TeamMemberDetailResponse,
+    InvitationDetailsResponse, InvitationAcceptResponse,
     TaskStatusCreateRequest, TaskStatusUpdateRequest, TaskStatusResponse,
     WorkflowTransitionCreateRequest, WorkflowTransitionResponse,
 )
@@ -63,6 +64,19 @@ async def list_projects(
 ):
     svc = RBACService(db)
     return await svc.list_projects(user_id=x_user_id)
+
+
+@router.post(
+    "/projects/{project_id}/complete-setup",
+    response_model=ProjectResponse,
+    summary="Mark project setup as complete",
+)
+async def complete_project_setup(
+    project_id: int,
+    db: Prisma = Depends(get_db),
+):
+    svc = RBACService(db)
+    return await svc.complete_project_setup(project_id)
 
 
 @router.get(
@@ -105,10 +119,11 @@ async def create_team(
 )
 async def list_teams(
     project_id: int = Path(...),
+    x_user_id: int = Header(..., alias="X-User-ID"),
     db: Prisma = Depends(get_db),
 ):
     svc = RBACService(db)
-    return await svc.list_teams(project_id)
+    return await svc.list_teams(project_id, x_user_id)
 
 
 @router.get(
@@ -403,6 +418,7 @@ async def invite_user(
 
 @router.get(
     "/invitations/{invitation_id}",
+    response_model=InvitationDetailsResponse,
     summary="Get invitation details (team name, role, inviter) for the landing page",
 )
 async def get_invitation_details(
@@ -420,6 +436,7 @@ async def get_invitation_details(
 
     return {
         "invitation_id": inv.id,
+        "project_id": team.projectId if team else 0,
         "team_id": inv.teamId,
         "team_name": team.name if team else "Unknown Team",
         "role_name": role.name if role else "Member",
@@ -430,6 +447,7 @@ async def get_invitation_details(
 
 @router.post(
     "/teams/{team_id}/invitations/accept",
+    response_model=InvitationAcceptResponse,
     summary="Accept an invitation and join the team (assigns role from invitation)",
     status_code=status.HTTP_201_CREATED,
 )
@@ -440,13 +458,19 @@ async def accept_invitation(
     db: Prisma = Depends(get_db),
 ):
     svc = RBACService(db)
-    member = await svc.accept_invitation(
+    member, project_id = await svc.accept_invitation(
         team_id=team_id,
         invitation_id=payload.invitation_id,
         user_id=x_user_id,
         name=payload.name,
     )
-    return {"message": "Joined team", "member_id": member.id, "team_id": member.teamId, "role_id": member.roleId}
+    return {
+        "message": "Joined team", 
+        "member_id": member.id, 
+        "project_id": project_id,
+        "team_id": member.teamId, 
+        "role_id": member.roleId
+    }
 
 
 @router.get(

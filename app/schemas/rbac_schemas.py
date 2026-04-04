@@ -15,6 +15,7 @@ class ProjectCreateRequest(BaseModel):
 class ProjectResponse(BaseModel):
     id: int
     name: str
+    setupComplete: bool = False
     createdAt: datetime
     updatedAt: datetime
     model_config = ConfigDict(from_attributes=True)
@@ -82,6 +83,23 @@ class TeamMemberDetailResponse(BaseModel):
     role_name: Optional[str]
     permission_codes: List[str]
     created_at: datetime
+
+class InvitationDetailsResponse(BaseModel):
+    invitation_id: int
+    project_id: int
+    team_id: int
+    team_name: str
+    role_name: str
+    inviter_name: str
+    email: str
+    accepted_at: Optional[datetime]
+
+class InvitationAcceptResponse(BaseModel):
+    message: str
+    member_id: int
+    project_id: int
+    team_id: int
+    role_id: int
 
 
 # ── Custom Workflow: Task Statuses ────────────────────────────────────────────

@@ -35,6 +35,18 @@ class GitHubService:
         }
         return jwt.encode(payload, key, algorithm="RS256")
 
+    async def get_app_metadata(self) -> dict:
+        """Fetches the App's metadata (slug, name, etc.) from GitHub."""
+        token = self._generate_jwt()
+        headers = {
+            "Authorization": f"Bearer {token}",
+            "Accept": "application/vnd.github+json",
+        }
+        async with httpx.AsyncClient() as client:
+            resp = await client.get(f"{self.base_url}/app", headers=headers)
+            resp.raise_for_status()
+            return resp.json()
+
     async def get_installation_token(self, installation_id: int) -> str:
         """Exchanges the App JWT for an installation access token."""
         token = self._generate_jwt()
@@ -50,6 +62,21 @@ class GitHubService:
             )
             resp.raise_for_status()
             return resp.json()["token"]
+
+    async def get_installation_details(self, installation_id: int) -> dict:
+        """Fetches metadata for a specific App installation (account info, etc.)."""
+        token = self._generate_jwt() # Auth as App
+        headers = {
+            "Authorization": f"Bearer {token}",
+            "Accept": "application/vnd.github+json",
+        }
+        async with httpx.AsyncClient() as client:
+            resp = await client.get(
+                f"{self.base_url}/app/installations/{installation_id}",
+                headers=headers
+            )
+            resp.raise_for_status()
+            return resp.json()
 
     async def list_installation_repositories(self, installation_id: int) -> List[dict]:
         """Lists all repositories accessible to a specific installation."""

@@ -31,6 +31,10 @@ class RBACService:
             raise HTTPException(status_code=404, detail="Project not found")
         return project
 
+    async def complete_project_setup(self, project_id: int):
+        await self.get_project(project_id)
+        return await self.repo.complete_project_setup(project_id)
+
     # ── Teams ─────────────────────────────────────────────────────────────────
 
     async def create_team(self, project_id: int, name: str, creator_user_id: int | None = None, copy_from_team_id: int | None = None):
@@ -59,9 +63,9 @@ class RBACService:
             raise HTTPException(status_code=404, detail="Team not found")
         return team
 
-    async def list_teams(self, project_id: int):
+    async def list_teams(self, project_id: int, user_id: int | None = None):
         await self.get_project(project_id)
-        return await self.repo.list_teams_by_project(project_id)
+        return await self.repo.list_teams_by_project(project_id, user_id)
 
     # ── Roles ─────────────────────────────────────────────────────────────────
 
@@ -190,7 +194,7 @@ class RBACService:
         return inv
 
     async def accept_invitation(self, team_id: int, invitation_id: int, user_id: int, name: str | None):
-        await self.get_team(team_id)
+        team = await self.get_team(team_id)
         inv = await self.repo.get_invitation_by_id(invitation_id)
         if not inv or inv.teamId != team_id:
             raise HTTPException(status_code=404, detail="Invitation not found")
@@ -215,7 +219,8 @@ class RBACService:
             raise HTTPException(status_code=409, detail="User is already a member of this team")
 
         await self.repo.mark_invitation_accepted(invitation_id)
-        return await self.repo.create_team_member(team_id, user.id, inv.roleId)
+        member = await self.repo.create_team_member(team_id, user.id, inv.roleId)
+        return member, team.projectId
 
     async def get_team_members(self, team_id: int):
         await self.get_team(team_id)

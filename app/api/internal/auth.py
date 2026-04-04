@@ -22,18 +22,22 @@ async def sync_user(payload: SyncRequest, db: Prisma = Depends(get_db)):
     """
     repo = RBACRepository(db)
     
-    # Check if user already exists
-    user = await repo.get_user_by_email(payload.email)
+    # Use upsert to handle potential race conditions and avoid UniqueViolationError
+    user = await db.user.upsert(
+        where={"email": payload.email},
+        data={
+            "create": {
+                "email": payload.email,
+                "name": payload.name or payload.email.split("@")[0]
+            },
+            "update": {
+                # Optionally update name if it changed, but let's keep it simple
+                "name": payload.name or payload.email.split("@")[0]
+            }
+        }
+    )
     
-    if not user:
-        logger.info(f"Creating new backend user for {payload.email}")
-        user = await repo.create_user(
-            email=payload.email,
-            name=payload.name or payload.email.split("@")[0]
-        )
-    else:
-        # Optionally update name if it changed, but let's keep it simple
-        pass
+    logger.info(f"Synced user {payload.email} (ID: {user.id})")
         
     return {
         "user_id": user.id,

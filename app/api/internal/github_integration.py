@@ -6,6 +6,7 @@ Handles installation callbacks and repository linking.
 import logging
 from typing import List
 from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi.responses import RedirectResponse
 from prisma import Prisma
 
 from app.database import get_db
@@ -17,20 +18,26 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/integrations/github", tags=["integrations"])
 
 @router.get("/install", status_code=status.HTTP_200_OK)
-async def get_install_url():
-    """Returns the GitHub App installation URL."""
-    from app.config import get_settings
-    settings = get_settings()
-    if not settings.github_client_id:
-         raise HTTPException(status_code=500, detail="GITHUB_CLIENT_ID not configured")
-    # This usually follows https://github.com/apps/<app-name>/installations/new
-    # For now, we'll return a placeholder or a constructed URL if we had the app name
-    return {"url": f"https://github.com/apps/vsm-agent/installations/new"}
+async def get_install_url(team_id: str | None = Query(None, alias="team_id")):
+    """Returns the GitHub App installation URL based on the App slug."""
+    svc = GitHubService()
+    try:
+        app_meta = await svc.get_app_metadata()
+        slug = app_meta.get("slug", "vsm-agent")
+        url = f"https://github.com/apps/{slug}/installations/new"
+        if team_id:
+            url += f"?state={team_id}"
+        return {"url": url}
+    except Exception as e:
+        logger.error(f"Failed to fetch App metadata: {e}")
+        # Default fallback
+        return {"url": "https://github.com/apps/vsm-agent/installations/new"}
 
 @router.get("/callback")
 async def github_callback(
     installation_id: int = Query(...),
     setup_action: str = Query(...),
+    state: str | None = Query(None), # This will be our team_id
     db: Prisma = Depends(get_db)
 ):
     """
@@ -39,24 +46,25 @@ async def github_callback(
     """
     svc = GitHubService()
     try:
-        # 1. Fetch metadata from GitHub API
-        # We need to get the account info for the installation
-        # For now, we'll use a mocked flow or a direct API call if we had tokens
-        # In a real app, we'd use the installation_id to get a token and then call /app/installations/:id
-        
-        # Simplified for now: 
-        # Create or update the installation
+        # 1. Fetch metadata from GitHub API to get account name
+        details = await svc.get_installation_details(installation_id)
+        account = details.get("account", {})
+        account_name = account.get("login", "Unknown")
+        target_id = account.get("id", 0)
+        target_type = details.get("target_type", "User")
+
         await db.githubinstallation.upsert(
             where={"id": installation_id},
             data={
                 "create": {
                     "id": installation_id,
-                    "accountName": "Unknown", # Would be fetched
+                    "accountName": account_name,
                     "appId": svc.app_id or "unknown",
-                    "targetId": 0, # Would be fetched
-                    "targetType": "Organization" # Would be fetched
+                    "targetId": target_id,
+                    "targetType": target_type
                 },
                 "update": {
+                    "accountName": account_name,
                     "updatedAt": "now"
                 }
             }
@@ -82,10 +90,26 @@ async def github_callback(
                 }
             )
         
-        return {"status": "success", "installation_id": installation_id, "repos_synced": len(repos)}
     except Exception as e:
         logger.exception("GitHub callback failed")
-        raise HTTPException(status_code=500, detail=str(e))
+        from app.config import get_settings
+        settings = get_settings()
+        return RedirectResponse(url=f"{settings.frontend_url}?status=github_error")
+    
+    from app.config import get_settings
+    settings = get_settings()
+    
+    # If we have a team_id in state, redirect back to that specific team's Code tab
+    if state and state.isdigit():
+        team_id = int(state)
+        team = await db.team.find_unique(where={"id": team_id})
+        if team:
+            return RedirectResponse(
+                url=f"{settings.frontend_url}/projects/{team.projectId}/board?team_id={team_id}&status=github_success"
+            )
+            
+    # Default redirect back to the frontend projects page
+    return RedirectResponse(url=f"{settings.frontend_url}/projects?status=github_success")
 
 @router.get("/repositories", response_model=List[GitHubRepoResponse])
 async def list_available_repositories(

@@ -10,6 +10,7 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.middleware.gzip import GZipMiddleware
 
 from app.config import get_settings
 from app.database import connect_prisma, disconnect_prisma
@@ -74,14 +75,15 @@ def create_app() -> FastAPI:
         lifespan=lifespan,
     )
 
-    # ── CORS ───────────────────────────────────────────────────────────────────
+    # ── CORS & Compression ─────────────────────────────────────────────────────
     app.add_middleware(
         CORSMiddleware,
-        allow_origins=cors_origins or ["http://localhost:8080"],
+        allow_origins=["*"],
         allow_credentials=False,
         allow_methods=["*"],
         allow_headers=["*"],
     )
+    app.add_middleware(GZipMiddleware, minimum_size=500)
 
     # ── Routers ────────────────────────────────────────────────────────────────
     app.include_router(health_router)

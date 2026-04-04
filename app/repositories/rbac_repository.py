@@ -35,6 +35,12 @@ class RBACRepository:
             )
         return await self.db.project.find_many(order={"createdAt": "desc"})
 
+    async def complete_project_setup(self, project_id: int):
+        return await self.db.project.update(
+            where={"id": project_id},
+            data={"setupComplete": True}
+        )
+
     # ── Teams ─────────────────────────────────────────────────────────────────
 
     async def create_team(self, project_id: int, name: str):
@@ -45,9 +51,61 @@ class RBACRepository:
     async def get_team(self, team_id: int):
         return await self.db.team.find_unique(where={"id": team_id})
 
-    async def list_teams_by_project(self, project_id: int):
+    async def is_high_level_in_project(self, user_id: int, project_id: int) -> bool:
+        """
+        A user is "High-level" if they have the 'MANAGE_TEAM' permission 
+        in ANY team within that project.
+        """
+        high_level = await self.db.teammember.find_first(
+            where={
+                "userId": user_id,
+                "team": {
+                    "projectId": project_id
+                },
+                "role": {
+                    "rolePermissions": {
+                        "some": {
+                            "permission": {
+                                "code": "MANAGE_TEAM"
+                            }
+                        }
+                    }
+                }
+            }
+        )
+        return high_level is not None
+
+    async def list_teams_by_project(self, project_id: int, user_id: int | None = None):
+        """
+        Visibility Logic:
+          - No user_id: return all teams (fallback)
+          - High-level: return all teams in project
+          - Others: return ONLY teams where user is a member
+        """
+        if not user_id:
+            return await self.db.team.find_many(
+                where={"projectId": project_id},
+                order={"createdAt": "asc"},
+            )
+
+        # 1. Elevate visibility if user is High-level (Scrum Master)
+        is_high = await self.is_high_level_in_project(user_id, project_id)
+        if is_high:
+            return await self.db.team.find_many(
+                where={"projectId": project_id},
+                order={"createdAt": "asc"},
+            )
+
+        # 2. Strict Siloing: Only member teams
         return await self.db.team.find_many(
-            where={"projectId": project_id},
+            where={
+                "projectId": project_id,
+                "members": {
+                    "some": {
+                        "userId": user_id
+                    }
+                }
+            },
             order={"createdAt": "asc"},
         )
 
@@ -319,11 +377,25 @@ class RBACRepository:
     # ── Permission Lookup (for middleware) ────────────────────────────────────
 
     async def get_user_permissions(self, user_id: int, team_id: int) -> list[str]:
+        # 1. Resolve project scope for this team
+        team = await self.db.team.find_unique(where={"id": team_id})
+        if not team:
+            return []
+
+        # 2. Check for "High-level" override (Admin visibility)
+        is_high = await self.is_high_level_in_project(user_id, team.projectId)
+        if is_high:
+            # Grant full project-wide permissions to High-level roles
+            all_perms = await self.db.permission.find_many()
+            return [p.code for p in all_perms]
+
+        # 3. Normal member lookup
         member = await self.db.teammember.find_first(
             where={"userId": user_id, "teamId": team_id},
         )
         if not member:
             return []
+            
         rows = await self.db.rolepermission.find_many(
             where={"roleId": member.roleId},
             include={"permission": True},

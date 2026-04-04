@@ -84,24 +84,7 @@ class SprintWithStatsSchema(SprintSchema):
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# HELPER
+# POST-PROCESSING
 # ─────────────────────────────────────────────────────────────────────────────
 
-def compute_task_counts(sprint_obj) -> SprintTaskCounts:
-    """Derive todo/in-progress/done counts from an included tasks list."""
-    counts = SprintTaskCounts()
-    tasks = getattr(sprint_obj, "tasks", None) or []
-    counts.total = len(tasks)
-    for task in tasks:
-        cat = (
-            task.currentStatus.category
-            if task.currentStatus
-            else "BACKLOG"
-        )
-        if cat == "DONE":
-            counts.done += 1
-        elif cat == "BACKLOG":
-            counts.todo += 1
-        else:
-            counts.in_progress += 1
-    return counts
+# (Stats logic has been moved to the service layer for optimized execution)

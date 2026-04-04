@@ -35,7 +35,6 @@ class SprintService:
         try:
             sprints = await self.db.sprint.find_many(
                 where={"teamId": team_id},
-                include={"tasks": {"include": {"currentStatus": True}}},
                 order={"createdAt": "asc"},
             )
             return sprints
@@ -62,6 +61,39 @@ class SprintService:
         if not sprint:
             raise HTTPException(status_code=404, detail="Sprint not found")
         return sprint
+
+    async def get_sprint_stats(self, team_id: int, sprint_ids: list[int]) -> dict:
+        """Fetch minimal task info to quickly aggregate counts per sprint."""
+        from app.schemas.sprint_schemas import SprintTaskCounts
+        if not sprint_ids:
+            return {}
+            
+        statuses = await self.db.taskstatus.find_many(where={"teamId": team_id})
+        status_category_map = {st.id: st.category for st in statuses}
+        
+        tasks = await self.db.task.find_many(
+            where={"sprintId": {"in": sprint_ids}, "teamId": team_id},
+        )
+        
+        stats_map = {sid: SprintTaskCounts() for sid in sprint_ids}
+        for task in tasks:
+            sid = task.sprintId
+            if not sid: continue
+            
+            cat = "BACKLOG"
+            if task.currentStatusId and task.currentStatusId in status_category_map:
+                cat = status_category_map[task.currentStatusId]
+                
+            stats = stats_map[sid]
+            stats.total += 1
+            if cat == "DONE":
+                stats.done += 1
+            elif cat == "BACKLOG":
+                stats.todo += 1
+            else:
+                stats.in_progress += 1
+                
+        return stats_map
 
     async def get_backlog_tasks(self, team_id: int, limit: int = 100, offset: int = 0):
         """Return tasks for a team that are NOT assigned to any sprint."""
@@ -151,7 +183,6 @@ class SprintService:
         updated = await self.db.sprint.update(
             where={"id": sprint_id},
             data=update_data,
-            include={"tasks": {"include": {"currentStatus": True}}},
         )
         logger.info(f"Sprint {sprint_id} started for team {team_id}")
         return updated
@@ -228,7 +259,6 @@ class SprintService:
                 "status": SprintStatus.COMPLETED.value,
                 "endDate": datetime.now(timezone.utc),
             },
-            include={"tasks": {"include": {"currentStatus": True}}},
         )
         return updated
 
@@ -278,5 +308,4 @@ class SprintService:
         return await self.db.sprint.update(
             where={"id": sprint_id},
             data=update_data,
-            include={"tasks": {"include": {"currentStatus": True}}},
         )

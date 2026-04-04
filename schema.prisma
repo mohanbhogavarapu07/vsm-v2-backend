@@ -158,10 +158,11 @@ model Permission {
 }
 
 model Project {
-  id        BigInt   @id @default(autoincrement())
-  name      String   @db.VarChar(255)
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  id            BigInt   @id @default(autoincrement())
+  name          String   @db.VarChar(255)
+  setupComplete Boolean  @default(false)
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
 
   teams Team[]
 

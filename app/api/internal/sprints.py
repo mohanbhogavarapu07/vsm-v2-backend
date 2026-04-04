@@ -28,7 +28,6 @@ from app.schemas.sprint_schemas import (
     SprintCompleteRequest,
     SprintSchema,
     SprintWithStatsSchema,
-    compute_task_counts,
 )
 from app.schemas.task_schemas import TaskSchema
 
@@ -76,10 +75,14 @@ async def list_sprints(
 ) -> list[SprintWithStatsSchema]:
     svc = SprintService(db)
     sprints = await svc.list_sprints(team_id)
+    
+    sprint_ids = [s.id for s in sprints]
+    stats_map = await svc.get_sprint_stats(team_id, sprint_ids)
+    
     result = []
     for s in sprints:
         schema = SprintWithStatsSchema.model_validate(s)
-        schema.task_counts = compute_task_counts(s)
+        schema.task_counts = stats_map.get(s.id, schema.task_counts)
         result.append(schema)
     return result
 
@@ -139,8 +142,9 @@ async def start_sprint(
         start_date=payload.startDate,
         end_date=payload.endDate,
     )
+    stats_map = await svc.get_sprint_stats(team_id, [sprint.id])
     schema = SprintWithStatsSchema.model_validate(sprint)
-    schema.task_counts = compute_task_counts(sprint)
+    schema.task_counts = stats_map.get(sprint.id, schema.task_counts)
     return schema
 
 
@@ -168,8 +172,9 @@ async def complete_sprint(
         team_id=team_id,
         rollover_sprint_id=payload.rollover_sprint_id,
     )
+    stats_map = await svc.get_sprint_stats(team_id, [sprint.id])
     schema = SprintWithStatsSchema.model_validate(sprint)
-    schema.task_counts = compute_task_counts(sprint)
+    schema.task_counts = stats_map.get(sprint.id, schema.task_counts)
     return schema
 
 
