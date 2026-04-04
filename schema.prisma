@@ -184,6 +184,7 @@ model Team {
   taskStatuses        TaskStatus[]
   workflowTransitions WorkflowTransition[]
   chatMessages        ChatMessage[]
+  githubRepositories  GitHubRepository[]
 
   @@index([projectId])
   @@map("teams")
@@ -374,6 +375,8 @@ model EventLog {
   source             EventSource
   referenceId        String?     @db.VarChar(255)
   payload            Json
+  installationId     BigInt?
+  repositoryId       BigInt?
   eventTimestamp     DateTime
   ingestionTimestamp DateTime    @default(now())
   processed          Boolean     @default(false)
@@ -386,6 +389,8 @@ model EventLog {
   @@index([eventType, eventTimestamp])
   @@index([processed])
   @@index([correlationId])
+  @@index([installationId])
+  @@index([repositoryId])
   @@map("event_log")
 }
 
@@ -477,6 +482,42 @@ model ActivityTaskMappingLog {
   @@index([activityId])
   @@index([taskId])
   @@map("activity_task_mapping_log")
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// GITHUB APP INTEGRATION
+// ─────────────────────────────────────────────────────────────────────────────
+
+model GitHubInstallation {
+  id          BigInt   @id // GitHub's installation_id
+  accountName String   @db.VarChar(255)
+  appId       String   @db.VarChar(100)
+  targetId    BigInt   // GitHub Account ID
+  targetType  String   @db.VarChar(50) // User or Organization
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  repositories GitHubRepository[]
+
+  @@map("github_installations")
+}
+
+model GitHubRepository {
+  id             BigInt  @id // GitHub's repository_id
+  name           String  @db.VarChar(255)
+  fullName       String  @db.VarChar(500)
+  installationId BigInt
+  teamId         BigInt? // Nullable until linked to a specific team
+
+  installation GitHubInstallation @relation(fields: [installationId], references: [id], onDelete: Cascade)
+  team         Team?              @relation(fields: [teamId], references: [id], onDelete: SetNull)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([installationId])
+  @@index([teamId])
+  @@map("github_repositories")
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

@@ -61,11 +61,27 @@ async def _process_event(task_instance: Task, event_id: int, queue_id: int) -> d
 
         try:
             payload = event.payload
+            repo_id = event.repositoryId
+            target_team_id = None
+
+            # 1. Identify the team associated with this repository
+            if repo_id:
+                gh_repo = await db.githubrepository.find_unique(where={"id": repo_id})
+                if gh_repo and gh_repo.teamId:
+                    target_team_id = gh_repo.teamId
+                    logger.info("Matched event %s to team %s", event_id, target_team_id)
 
             if event.eventType in (EventType.PR_CREATED.value, EventType.PR_MERGED.value):
                 branch = payload.get("pull_request", {}).get("head", {}).get("ref")
                 pr_num = str(payload.get("number", ""))
                 task_id = _extract_task_id_from_branch(branch)
+                
+                # Verify task belongs to team if team is known
+                if task_id and target_team_id:
+                    task = await db.task.find_unique(where={"id": task_id})
+                    if not task or task.teamId != target_team_id:
+                        logger.warning("Task %s does not belong to team %s. Marking as unlinked.", task_id, target_team_id)
+                        task_id = None
 
                 if task_id:
                     await activity_repo.create_activity(
@@ -89,6 +105,13 @@ async def _process_event(task_instance: Task, event_id: int, queue_id: int) -> d
                     task_id = _extract_task_id_from_branch(branch)
                     commit_msg = commit.get("message", "")
 
+                    # Verify task belongs to team if team is known
+                    if task_id and target_team_id:
+                        task = await db.task.find_unique(where={"id": task_id})
+                        if not task or task.teamId != target_team_id:
+                            logger.warning("Task %s does not belong to team %s. Marking as unlinked.", task_id, target_team_id)
+                            task_id = None
+
                     if task_id:
                         await activity_repo.create_activity(
                             activity_type=ActivityType.COMMIT,
@@ -106,6 +129,8 @@ async def _process_event(task_instance: Task, event_id: int, queue_id: int) -> d
                         )
 
             elif event.eventType == EventType.CI_STATUS.value:
+                # CI status might also be linkable to tasks via branch names in payload
+                # For now keeping it general but storing reference
                 await activity_repo.create_activity(
                     activity_type=ActivityType.CI,
                     metadata=payload,

@@ -20,6 +20,7 @@ from app.api.internal.tasks import router as tasks_router
 from app.api.internal.health import router as health_router
 from app.api.internal.rbac import router as rbac_router
 from app.api.internal.sprints import router as sprints_router
+from app.api.internal.github_integration import router as github_integration_router
 from app.utils.permission_seed import seed_permissions
 
 settings = get_settings()
@@ -90,6 +91,7 @@ def create_app() -> FastAPI:
     app.include_router(tasks_router)
     app.include_router(rbac_router)
     app.include_router(sprints_router)
+    app.include_router(github_integration_router)
 
     from app.api.internal.auth import router as auth_router
     app.include_router(auth_router)

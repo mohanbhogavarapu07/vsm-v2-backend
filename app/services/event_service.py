@@ -28,9 +28,11 @@ class EventService:
     async def ingest_github_event(
         self,
         payload: dict,
-        event_timestamp: datetime | None = None,
+        event_timestamp: datetime,
         reference_id: str | None = None,
         branch_name: str | None = None,
+        installation_id: int | None = None,
+        repository_id: int | None = None,
     ) -> int:
         ts = event_timestamp or datetime.now(timezone.utc)
         correlation_id = generate_correlation_id(
@@ -51,9 +53,11 @@ class EventService:
             event_type=event_type,
             source=EventSource.GITHUB,
             payload=payload,
-            event_timestamp=ts,
+            event_timestamp=event_timestamp,
             reference_id=reference_id,
             correlation_id=correlation_id,
+            installation_id=installation_id,
+            repository_id=repository_id,
         )
         await self._repo.enqueue_event(event.id)
         logger.info("Ingested GitHub event id=%s type=%s", event.id, event_type)

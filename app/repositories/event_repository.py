@@ -35,6 +35,8 @@ class EventRepository:
         event_timestamp: datetime,
         reference_id: str | None = None,
         correlation_id: str | None = None,
+        installation_id: int | None = None,
+        repository_id: int | None = None,
     ) -> EventLog:
         event = await self._db.eventlog.create(
             data={
@@ -44,6 +46,8 @@ class EventRepository:
                 "eventTimestamp": event_timestamp,
                 "referenceId": reference_id,
                 "correlationId": correlation_id,
+                "installationId": installation_id,
+                "repositoryId": repository_id,
             }
         )
         logger.debug("Created event_log id=%s type=%s", event.id, event_type)

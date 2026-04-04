@@ -53,11 +53,17 @@ async def github_webhook(
     )
     reference_id = str(pr.get("number", "")) if pr else payload.get("after", "")
 
+    # Extract GitHub App context
+    installation_id = payload.get("installation", {}).get("id")
+    repository_id = payload.get("repository", {}).get("id")
+
     event_id = await svc.ingest_github_event(
         payload=payload,
         event_timestamp=datetime.now(timezone.utc),
         reference_id=reference_id or None,
         branch_name=branch,
+        installation_id=installation_id,
+        repository_id=repository_id,
     )
 
     event_repo = EventRepository(db)

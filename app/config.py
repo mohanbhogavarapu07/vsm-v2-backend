@@ -44,6 +44,12 @@ class Settings(BaseSettings):
     github_webhook_secret: str | None = None
     webhook_hmac_enabled: bool = True
 
+    # ── GitHub App Integration ────────────────────────────────────────────────
+    github_app_id: str | None = None
+    github_private_key: str | None = None
+    github_client_id: str | None = None
+    github_client_secret: str | None = None
+
     # ── Backend URL (for workers calling API) ─────────────────────────────────
     backend_url: str = "http://localhost:8000"
 
