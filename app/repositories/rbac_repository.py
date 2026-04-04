@@ -17,7 +17,22 @@ class RBACRepository:
             include={"teams": True},
         )
 
-    async def list_projects(self):
+    async def list_projects(self, user_id: int | None = None):
+        if user_id:
+            return await self.db.project.find_many(
+                where={
+                    "teams": {
+                        "some": {
+                            "members": {
+                                "some": {
+                                    "userId": user_id
+                                }
+                            }
+                        }
+                    }
+                },
+                order={"createdAt": "desc"}
+            )
         return await self.db.project.find_many(order={"createdAt": "desc"})
 
     # ── Teams ─────────────────────────────────────────────────────────────────
@@ -35,6 +50,61 @@ class RBACRepository:
             where={"projectId": project_id},
             order={"createdAt": "asc"},
         )
+
+    async def update_team(self, team_id: int, name: str | None):
+        data = {}
+        if name is not None:
+            data["name"] = name
+        return await self.db.team.update(where={"id": team_id}, data=data)
+
+    async def copy_team_config(self, copy_from_team_id: int, new_team_id: int, creator_user_id: int | None = None):
+        # 1. Copy Roles
+        old_roles = await self.db.teamrole.find_many(where={"teamId": copy_from_team_id}, include={"rolePermissions": True})
+        role_map = {} 
+        admin_role_id = None
+        for old_role in old_roles:
+            new_role = await self.db.teamrole.create(data={"teamId": new_team_id, "name": old_role.name})
+            role_map[old_role.id] = new_role.id
+            if old_role.name.lower() == "admin" or old_role.name.lower() == "owner":
+                admin_role_id = new_role.id
+            if old_role.rolePermissions:
+                permission_ids = [rp.permissionId for rp in old_role.rolePermissions]
+                await self.replace_role_permissions(new_role.id, permission_ids)
+                
+        # if creator is provided, assign them to the admin role
+        if creator_user_id and role_map:
+            best_role = admin_role_id or list(role_map.values())[0]
+            await self.create_team_member(new_team_id, creator_user_id, best_role)
+
+        # 2. Copy Workflow statuses
+        old_statuses = await self.db.taskstatus.find_many(where={"teamId": copy_from_team_id})
+        status_map = {}
+        for old_status in old_statuses:
+            new_status = await self.db.taskstatus.create(
+                data={
+                    "teamId": new_team_id,
+                    "name": old_status.name,
+                    "category": old_status.category,
+                    "stageOrder": old_status.stageOrder,
+                    "isTerminal": old_status.isTerminal,
+                }
+            )
+            status_map[old_status.id] = new_status.id
+
+        # 3. Copy Workflow transitions
+        old_transitions = await self.db.workflowtransition.find_many(where={"teamId": copy_from_team_id})
+        for old_trans in old_transitions:
+            if old_trans.fromStatusId in status_map and old_trans.toStatusId in status_map:
+                await self.db.workflowtransition.create(
+                    data={
+                        "teamId": new_team_id,
+                        "fromStatusId": status_map[old_trans.fromStatusId],
+                        "toStatusId": status_map[old_trans.toStatusId],
+                        "fromCategory": old_trans.fromCategory,
+                        "toCategory": old_trans.toCategory,
+                        "requiresManualApproval": old_trans.requiresManualApproval,
+                    }
+                )
 
     # ── Roles ─────────────────────────────────────────────────────────────────
 

@@ -23,7 +23,7 @@ from app.services.rbac_service import RBACService
 from app.utils.permissions import require_permission, require_any_permission, get_current_user_permissions
 from app.schemas.rbac_schemas import (
     ProjectCreateRequest, ProjectResponse,
-    TeamCreateRequest, TeamResponse,
+    TeamCreateRequest, TeamUpdateRequest, TeamResponse,
     RoleCreateRequest, RoleUpdateRequest, RoleResponse,
     UserInviteRequest, InvitationAcceptRequest, MemberRoleUpdateRequest, TeamMemberDetailResponse,
     TaskStatusCreateRequest, TaskStatusUpdateRequest, TaskStatusResponse,
@@ -58,10 +58,11 @@ async def create_project(
     summary="List all projects",
 )
 async def list_projects(
+    x_user_id: Optional[int] = Header(None, alias="X-User-ID"),
     db: Prisma = Depends(get_db),
 ):
     svc = RBACService(db)
-    return await svc.list_projects()
+    return await svc.list_projects(user_id=x_user_id)
 
 
 @router.get(
@@ -94,7 +95,7 @@ async def create_team(
     db: Prisma = Depends(get_db),
 ):
     svc = RBACService(db)
-    return await svc.create_team(project_id, payload.name, creator_user_id=x_user_id)
+    return await svc.create_team(project_id, payload.name, creator_user_id=x_user_id, copy_from_team_id=payload.copy_from_team_id)
 
 
 @router.get(
@@ -121,6 +122,21 @@ async def get_team(
 ):
     svc = RBACService(db)
     return await svc.get_team(team_id)
+
+
+@router.patch(
+    "/teams/{team_id}",
+    response_model=TeamResponse,
+    summary="Update team details (e.g. rename)",
+)
+async def update_team(
+    team_id: int = Path(...),
+    payload: TeamUpdateRequest = ...,
+    _: None = Depends(require_permission("MANAGE_TEAM")),
+    db: Prisma = Depends(get_db),
+):
+    svc = RBACService(db)
+    return await svc.update_team(team_id, payload.name)
 
 
 # ─────────────────────────────────────────────────────────────────────────────

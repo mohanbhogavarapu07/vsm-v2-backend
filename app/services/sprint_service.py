@@ -137,15 +137,7 @@ class SprintService:
                 detail="Cannot start a completed sprint.",
             )
 
-        # Enforce only one active sprint per team
-        active_sprint = await self.db.sprint.find_first(
-            where={"teamId": team_id, "status": SprintStatus.ACTIVE.value}
-        )
-        if active_sprint and active_sprint.id != sprint_id:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail=f"Sprint '{active_sprint.name}' is already active. Complete it first.",
-            )
+        # Removed constraint enforcing only one active sprint per team.
 
         update_data: dict = {
             "status": SprintStatus.ACTIVE.value,
