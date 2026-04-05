@@ -32,7 +32,7 @@ from app.schemas.rbac_schemas import (
 )
 
 logger = logging.getLogger(__name__)
-router = APIRouter(tags=["rbac"])
+router = APIRouter(tags=["rbac"], redirect_slashes=False)
 
 
 # ─────────────────────────────────────────────────────────────────────────────

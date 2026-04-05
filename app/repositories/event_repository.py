@@ -13,7 +13,7 @@ Prisma API used:
 import logging
 from datetime import datetime, timezone
 
-from prisma import Prisma
+from prisma import Prisma, Json
 from prisma.models import EventLog, EventProcessingQueue, EventAggregationWindow
 
 from app.models.enums import EventType, EventSource, QueueStatus, WindowStatus
@@ -38,18 +38,22 @@ class EventRepository:
         installation_id: int | None = None,
         repository_id: int | None = None,
     ) -> EventLog:
-        event = await self._db.eventlog.create(
-            data={
-                "eventType": event_type.value,
-                "source": source.value,
-                "payload": payload,
-                "eventTimestamp": event_timestamp,
-                "referenceId": reference_id,
-                "correlationId": correlation_id,
-                "installationId": installation_id,
-                "repositoryId": repository_id,
-            }
-        )
+        try:
+            event = await self._db.eventlog.create(
+                data={
+                    "eventType": event_type.value,
+                    "source": source.value,
+                    "payload": Json(payload),
+                    "eventTimestamp": event_timestamp,
+                    "referenceId": reference_id,
+                    "correlationId": correlation_id,
+                    "installationId": installation_id,
+                    "repositoryId": repository_id,
+                }
+            )
+        except Exception as e:
+            logger.error("Failed to create event_log: %s (payload: %s)", e, payload)
+            raise
         logger.debug("Created event_log id=%s type=%s", event.id, event_type)
         return event
 

@@ -33,7 +33,7 @@ from app.schemas.task_schemas import TaskSchema
 
 logger = logging.getLogger(__name__)
 
-router = APIRouter(prefix="/teams/{team_id}", tags=["sprints"])
+router = APIRouter(prefix="/teams/{team_id}", tags=["sprints"], redirect_slashes=False)
 
 
 # ─────────────────────────────────────────────────────────────────────────────

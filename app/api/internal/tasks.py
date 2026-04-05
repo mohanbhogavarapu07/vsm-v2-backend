@@ -37,7 +37,7 @@ from app.models.enums import MappingMethod
 
 logger = logging.getLogger(__name__)
 
-router = APIRouter(prefix="/tasks", tags=["tasks"])
+router = APIRouter(prefix="/tasks", tags=["tasks"], redirect_slashes=False)
 
 
 # ─────────────────────────────────────────────────────────────────────────────

@@ -7,7 +7,9 @@ import time
 import jwt
 import httpx
 import logging
-from typing import Any, List
+import asyncio
+from typing import Any, List, Optional
+from prisma import Prisma
 from app.config import get_settings
 
 logger = logging.getLogger(__name__)
@@ -120,3 +122,85 @@ class GitHubService:
             )
             resp.raise_for_status()
             return resp.json()
+
+    async def sync_repositories(self, db: Prisma, installation_id: int, team_id: Optional[int] = None) -> List[Any]:
+        """
+        Synchronizes repositories for a specific installation.
+        Updates metadata and optionally links new repositories to a team.
+        Returns the list of processed repositories.
+        """
+        logger.info(f"Syncing repositories for installation {installation_id} (Team: {team_id})")
+        
+        # 1. Fetch metadata from GitHub API to ensure we have the account name
+        details = await self.get_installation_details(installation_id)
+        account = details.get("account", {})
+        account_name = account.get("login", "Unknown")
+        target_id = account.get("id", 0)
+        target_type = details.get("target_type", "User")
+
+        # 2. Upsert installation metadata
+        await db.githubinstallation.upsert(
+            where={"id": installation_id},
+            data={
+                "create": {
+                    "id": installation_id,
+                    "accountName": account_name,
+                    "appId": str(self.app_id) if self.app_id else "unknown",
+                    "targetId": target_id,
+                    "targetType": target_type
+                },
+                "update": {
+                    "accountName": account_name
+                }
+            }
+        )
+
+        # 3. Fetch all repositories
+        repos = await self.list_installation_repositories(installation_id)
+        logger.info(f"Retrieved {len(repos)} repositories from GitHub for installation {installation_id}")
+        
+        synced_repos = []
+        for r in repos:
+            retry_count = 0
+            max_retries = 3
+            while retry_count < max_retries:
+                try:
+                    # Check if repo already exists to avoid overwriting existing team associations
+                    existing = await db.githubrepository.find_unique(where={"id": r["id"]})
+                    
+                    repo_data = {
+                        "id": r["id"],
+                        "name": r["name"],
+                        "fullName": r["full_name"],
+                        "installationId": installation_id
+                    }
+                    
+                    # If we have a team_id, and the repo is new or not yet linked, link it.
+                    if team_id:
+                        if not existing or existing.teamId is None:
+                            repo_data["teamId"] = team_id
+                    
+                    upserted = await db.githubrepository.upsert(
+                        where={"id": r["id"]},
+                        data={
+                            "create": repo_data,
+                            "update": {
+                                "name": r["name"],
+                                "fullName": r["full_name"],
+                                "installationId": installation_id,
+                                # Preserve existing teamId if not explicitly linking to a new team
+                                "teamId": repo_data.get("teamId", existing.teamId if existing else None)
+                            }
+                        }
+                    )
+                    synced_repos.append(upserted)
+                    break # Success
+                except Exception as repo_err:
+                    retry_count += 1
+                    logger.warning(f"Failed to sync repo {r['full_name']} (attempt {retry_count}/{max_retries}): {repo_err}")
+                    if retry_count >= max_retries:
+                        logger.error(f"Permanently failed to sync repo {r['full_name']} after {max_retries} attempts")
+                    else:
+                        await asyncio.sleep(1 * retry_count) # Exponential backoff
+        
+        return synced_repos

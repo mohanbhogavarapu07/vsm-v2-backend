@@ -15,6 +15,8 @@ from app.services.event_service import EventService
 from app.schemas.webhook_schemas import WebhookReceivedResponse
 from app.workers.event_processor import process_event
 from app.workers.aggregation_worker import aggregate_event
+from app.services.github_service import GitHubService
+from fastapi import BackgroundTasks
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/webhooks", tags=["webhooks"])
@@ -28,6 +30,7 @@ router = APIRouter(prefix="/webhooks", tags=["webhooks"])
 )
 async def github_webhook(
     request: Request,
+    background_tasks: BackgroundTasks,
     x_hub_signature_256: str | None = Header(default=None),
     x_github_event: str | None = Header(default=None),
     db: Prisma = Depends(get_db),
@@ -57,14 +60,29 @@ async def github_webhook(
     installation_id = payload.get("installation", {}).get("id")
     repository_id = payload.get("repository", {}).get("id")
 
-    event_id = await svc.ingest_github_event(
-        payload=payload,
-        event_timestamp=datetime.now(timezone.utc),
-        reference_id=reference_id or None,
-        branch_name=branch,
-        installation_id=installation_id,
-        repository_id=repository_id,
-    )
+    try:
+        event_id = await svc.ingest_github_event(
+            payload=payload,
+            event_timestamp=datetime.now(timezone.utc),
+            reference_id=reference_id or None,
+            branch_name=branch,
+            installation_id=installation_id,
+            repository_id=repository_id,
+        )
+    except Exception as e:
+        logger.error("Failed to ingest GitHub event: %s", e)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to ingest event: {str(e)}"
+        )
+
+    # ── Automated Repository Sync ──────────────────────────────────────────
+    # If this is an installation-related event, trigger a background sync
+    if x_github_event in ["installation", "installation_repositories"]:
+        logger.info(f"Triggering background sync for GitHub event: {x_github_event}")
+        gh_svc = GitHubService()
+        if installation_id:
+            background_tasks.add_task(gh_svc.sync_repositories, db, installation_id)
 
     event_repo = EventRepository(db)
     event = await event_repo.get_event_by_id(event_id)

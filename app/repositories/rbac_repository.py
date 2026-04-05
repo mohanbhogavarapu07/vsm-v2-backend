@@ -1,5 +1,6 @@
 from prisma import Prisma
 from datetime import datetime, timezone
+from app.utils.cache import permission_cache, all_permissions_cache
 
 
 class RBACRepository:
@@ -377,27 +378,62 @@ class RBACRepository:
     # ── Permission Lookup (for middleware) ────────────────────────────────────
 
     async def get_user_permissions(self, user_id: int, team_id: int) -> list[str]:
-        # 1. Resolve project scope for this team
+        """
+        Optimized and cached permission lookup.
+        """
+        cache_key = f"rbac_{user_id}_{team_id}"
+        cached = permission_cache.get(cache_key)
+        if cached is not None:
+            return cached
+
+        # 1. Resolve team and project context
         team = await self.db.team.find_unique(where={"id": team_id})
         if not team:
             return []
 
-        # 2. Check for "High-level" override (Admin visibility)
-        is_high = await self.is_high_level_in_project(user_id, team.projectId)
-        if is_high:
-            # Grant full project-wide permissions to High-level roles
-            all_perms = await self.db.permission.find_many()
-            return [p.code for p in all_perms]
+        # 2. Fetch ALL memberships for this user in this project
+        memberships = await self.db.teammember.find_many(
+            where={
+                "userId": user_id,
+                "team": {"projectId": team.projectId},
+            },
+            include={
+                "role": {
+                    "include": {
+                        "rolePermissions": {"include": {"permission": True}}
+                    }
+                }
+            },
+        )
 
-        # 3. Normal member lookup
-        member = await self.db.teammember.find_first(
-            where={"userId": user_id, "teamId": team_id},
-        )
-        if not member:
+        if not memberships:
+            permission_cache.set(cache_key, [])
             return []
-            
-        rows = await self.db.rolepermission.find_many(
-            where={"roleId": member.roleId},
-            include={"permission": True},
-        )
-        return [r.permission.code for r in rows if getattr(r, "permission", None)]
+
+        # 3. Check for high-level status
+        is_high = False
+        target_team_permissions = []
+
+        for m in memberships:
+            perms = [
+                rp.permission.code
+                for rp in m.role.rolePermissions
+                if getattr(rp, "permission", None)
+            ]
+            if "MANAGE_TEAM" in perms:
+                is_high = True
+            if m.teamId == team_id:
+                target_team_permissions = perms
+
+        # 4. If high-level, grant all system permissions
+        if is_high:
+            all_perms = all_permissions_cache.get("system_all")
+            if all_perms is None:
+                rows = await self.db.permission.find_many()
+                all_perms = [p.code for p in rows]
+                all_permissions_cache.set("system_all", all_perms)
+            permission_cache.set(cache_key, all_perms)
+            return all_perms
+
+        permission_cache.set(cache_key, target_team_permissions)
+        return target_team_permissions

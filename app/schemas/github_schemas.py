@@ -3,26 +3,30 @@ VSM Backend – GitHub Integration Schemas
 """
 
 from typing import List, Optional
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 
 class GitHubInstallationBase(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+    
     id: int
-    account_name: str
-    target_id: int
-    target_type: str
+    accountName: str
+    targetId: int
+    targetType: str
 
 class GitHubRepositoryBase(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+    
     id: int
     name: str
-    full_name: str
-    installation_id: int
-    team_id: Optional[int] = None
+    fullName: str
+    installationId: int
+    teamId: Optional[int] = None
 
 class GitHubRepoLinkRequest(BaseModel):
-    repository_id: int
+    repositoryId: int
 
 class GitHubRepoUnlinkRequest(BaseModel):
-    repository_id: int
+    repositoryId: int
 
 class GitHubRepoResponse(GitHubRepositoryBase):
     pass
