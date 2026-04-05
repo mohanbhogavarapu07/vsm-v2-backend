@@ -36,6 +36,7 @@ class TaskRepository:
         sprint_id: int | None = None,
         current_status_id: int | None = None,
         assignee_id: int | None = None,
+        priority: str | None = None,
     ) -> Task:
         data: dict[str, Any] = {
             "teamId": team_id,
@@ -49,6 +50,8 @@ class TaskRepository:
             data["currentStatusId"] = current_status_id
         if assignee_id:
             data["assigneeId"] = assignee_id
+        if priority:
+            data["priority"] = priority
 
         task = await self._db.task.create(data=data)
         logger.info("Created task id=%s org=%s", task.id, team_id)

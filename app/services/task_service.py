@@ -7,6 +7,7 @@ user, authenticating via a dedicated service-account user (X-User-ID header).
 """
 
 import logging
+import asyncio
 from typing import Any
 
 from fastapi import HTTPException, status
@@ -16,6 +17,7 @@ from prisma.models import Task, AgentDecision
 from app.models.enums import DecisionSource, FeedbackResult
 from app.repositories.task_repository import TaskRepository
 from app.repositories.rbac_repository import RBACRepository
+from app.services.email_service import send_task_assignment_email
 
 logger = logging.getLogger(__name__)
 
@@ -36,6 +38,7 @@ class TaskService:
         sprint_id: int | None = None,
         current_status_id: int | None = None,
         assignee_id: int | None = None,
+        priority: str | None = None,
     ) -> Task:
         """Create a task scoped to the given team."""
         # Verify team exists
@@ -49,6 +52,7 @@ class TaskService:
             sprint_id=sprint_id,
             current_status_id=current_status_id,
             assignee_id=assignee_id,
+            priority=priority,
         )
 
     async def get_task(self, task_id: int) -> Task | None:
@@ -73,6 +77,8 @@ class TaskService:
         sprint_id: int | None = None,
         current_status_id: int | None = None,
         assignee_id: int | None = None,
+        priority: str | None = None,
+        order: float | None = None,
     ) -> Task:
         task = await self.require_task(task_id)
         data: dict[str, Any] = {}
@@ -86,9 +92,47 @@ class TaskService:
             data["currentStatusId"] = current_status_id
         if assignee_id is not None:
             data["assigneeId"] = assignee_id
+        if priority is not None:
+            data["priority"] = priority
+        if order is not None:
+            data["order"] = order
         if not data:
             return task
+
+        # Check if email needs to be sent
+        trigger_email = (
+            assignee_id is not None 
+            and getattr(task, "assigneeId", None) != assignee_id
+        )
+
         updated = await self._task_repo.update_task(task_id, data)
+
+        if trigger_email and assignee_id:
+            async def _safe_send_email():
+                try:
+                    member = await self._db.teammember.find_unique(
+                        where={"id": assignee_id},
+                        include={
+                            "user": True,
+                            "team": {
+                                "include": {"project": True}
+                            }
+                        }
+                    )
+                    if member and member.user and member.team and member.team.project:
+                        await send_task_assignment_email(
+                            user_email=member.user.email,
+                            user_name=member.user.name,
+                            task_title=title or task.title,
+                            project_name=member.team.project.name,
+                            team_name=member.team.name
+                        )
+                except Exception as e:
+                    logger.error("Failed to send assignment email: %s", str(e), exc_info=True)
+
+            # Fire and forget immediately with robust error boundary
+            asyncio.create_task(_safe_send_email())
+
         return updated  # type: ignore[return-value]
 
     async def delete_task(self, task_id: int) -> None:
