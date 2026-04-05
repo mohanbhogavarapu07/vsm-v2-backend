@@ -309,3 +309,7 @@ class SprintService:
             where={"id": sprint_id},
             data=update_data,
         )
+
+    async def delete_sprint(self, sprint_id: int, team_id: int):
+        await self.require_sprint(sprint_id, team_id)
+        return await self.db.sprint.delete(where={"id": sprint_id})
