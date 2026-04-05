@@ -63,6 +63,7 @@ async def create_task(
         sprint_id=payload.sprint_id,
         current_status_id=payload.current_status_id,
         assignee_id=payload.assignee_id,
+        priority=payload.priority,
     )
     return TaskSchema.model_validate(task)
 
@@ -120,6 +121,8 @@ async def update_task(
         sprint_id=payload.sprint_id,
         current_status_id=payload.current_status_id,
         assignee_id=payload.assignee_id,
+        priority=payload.priority,
+        order=payload.order,
     )
     return TaskSchema.model_validate(task)
 

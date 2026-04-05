@@ -37,6 +37,8 @@ class TaskSchema(BaseModel):
     sprintId: int | None = None
     currentStatusId: int | None = None
     assigneeId: int | None = None
+    priority: str | None = None
+    order: float | None = None
     createdAt: datetime
     updatedAt: datetime
     currentStatus: TaskStatusSchema | None = None
@@ -50,6 +52,7 @@ class TaskCreateRequest(BaseModel):
     sprint_id: int | None = None
     current_status_id: int | None = None
     assignee_id: int | None = None
+    priority: str | None = None
 
 
 class TaskUpdateRequest(BaseModel):
@@ -58,6 +61,8 @@ class TaskUpdateRequest(BaseModel):
     sprint_id: int | None = None
     current_status_id: int | None = None
     assignee_id: int | None = None
+    priority: str | None = None
+    order: float | None = None
 
 
 # ── Status Transition ─────────────────────────────────────────────────────────

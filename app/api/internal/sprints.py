@@ -111,6 +111,21 @@ async def update_sprint(
     return SprintSchema.model_validate(sprint)
 
 
+@router.delete(
+    "/sprints/{sprint_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    summary="Delete a sprint [requires UPDATE_TASK permission]",
+)
+async def delete_sprint(
+    sprint_id: int = Path(...),
+    team_id: int = Path(...),
+    _: None = Depends(require_permission("UPDATE_TASK")),
+    db: Prisma = Depends(get_db),
+) -> None:
+    svc = SprintService(db)
+    await svc.delete_sprint(sprint_id, team_id)
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # SPRINT LIFECYCLE
 # ─────────────────────────────────────────────────────────────────────────────

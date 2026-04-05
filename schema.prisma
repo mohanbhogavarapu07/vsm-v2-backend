@@ -27,6 +27,13 @@ enum TaskStatusCategory {
   BLOCKED
 }
 
+enum TaskPriority {
+  LOW
+  MEDIUM
+  HIGH
+  CRITICAL
+}
+
 enum SprintStatus {
   PLANNED
   ACTIVE
@@ -311,6 +318,8 @@ model Task {
   sprintId        BigInt?
   title           String      @db.VarChar(500)
   description     String?
+  priority        TaskPriority @default(MEDIUM)
+  order           Float       @default(1000)
   currentStatusId BigInt?
   assigneeId      BigInt?
   createdAt       DateTime    @default(now())
