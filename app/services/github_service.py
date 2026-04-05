@@ -159,6 +159,9 @@ class GitHubService:
         repos = await self.list_installation_repositories(installation_id)
         logger.info(f"Retrieved {len(repos)} repositories from GitHub for installation {installation_id}")
         
+        # Ensure we only automatically link ONE repository upon installation
+        team_repo_set = False
+        
         synced_repos = []
         for r in repos:
             retry_count = 0
@@ -175,10 +178,15 @@ class GitHubService:
                         "installationId": installation_id
                     }
                     
-                    # If we have a team_id, and the repo is new or not yet linked, link it.
-                    if team_id:
-                        if not existing or existing.teamId is None:
-                            repo_data["teamId"] = team_id
+                    # Strictly enforce 1-to-1 repository-to-team mapping during auto-sync
+                    if team_id and not team_repo_set:
+                        # Unlink any existing repositories for this team
+                        await db.githubrepository.update_many(
+                            where={"teamId": team_id},
+                            data={"teamId": None}
+                        )
+                        repo_data["teamId"] = team_id
+                        team_repo_set = True
                     
                     upserted = await db.githubrepository.upsert(
                         where={"id": r["id"]},
@@ -188,7 +196,6 @@ class GitHubService:
                                 "name": r["name"],
                                 "fullName": r["full_name"],
                                 "installationId": installation_id,
-                                # Preserve existing teamId if not explicitly linking to a new team
                                 "teamId": repo_data.get("teamId", existing.teamId if existing else None)
                             }
                         }

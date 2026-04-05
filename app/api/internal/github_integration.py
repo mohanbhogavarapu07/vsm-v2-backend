@@ -60,8 +60,24 @@ async def github_callback(
     Fetches and stores installation & repository metadata.
     """
     svc = GitHubService()
+    team_id = None
+    return_url = None
+    
+    if state:
+        try:
+            import json
+            import base64
+            padded_state = state + '=' * (-len(state) % 4)
+            state_data = json.loads(base64.urlsafe_b64decode(padded_state.encode()).decode())
+            team_id = state_data.get("team_id")
+            return_url = state_data.get("return_url")
+            if team_id:
+                team_id = int(team_id)
+        except Exception as e:
+            logger.error(f"Failed to decode state parameter: {e}")
+
     try:
-        logger.info(f"Processing GitHub callback for installation {installation_id} with state/team: {state}")
+        logger.info(f"Processing GitHub callback for installation {installation_id} with parsed team_id: {team_id}")
         
         # Use the centralized sync service
         await svc.sync_repositories(db, installation_id, team_id)
@@ -81,7 +97,10 @@ async def github_callback(
             parsed_origin = urlparse(origin)
             target_base = f"{parsed_origin.scheme}://{parsed_origin.netloc}"
             
-        return RedirectResponse(url=f"{target_base}/projects?status=github_error")
+        return RedirectResponse(
+            url=f"{target_base}/projects?status=github_error",
+            status_code=status.HTTP_302_FOUND
+        )
     
     from app.config import get_settings
     settings = get_settings()
@@ -109,17 +128,21 @@ async def github_callback(
         
     logger.info(f"Using final redirect base: {target_base}")
     
-    # If we have a team_id in state, redirect back to that specific team's Code tab
+    # If we have a team_id in state, redirect back to that specific team's configuration tab
     if team_id:
         team = await db.team.find_unique(where={"id": team_id})
         if team:
             logger.info(f"Redirecting back to team {team_id} (Project {team.projectId}) at {target_base}")
             return RedirectResponse(
-                url=f"{target_base}/projects/{team.projectId}/board?team_id={team_id}&status=github_success"
+                url=f"{target_base}/projects/{team.projectId}/teams/{team_id}/team?status=github_success",
+                status_code=status.HTTP_302_FOUND
             )
     
     logger.info(f"Redirecting back to projects at {target_base}")
-    return RedirectResponse(url=f"{target_base}/projects?status=github_success")
+    return RedirectResponse(
+        url=f"{target_base}/projects?status=github_success",
+        status_code=status.HTTP_302_FOUND
+    )
 
 @router.get("/repositories", response_model=List[GitHubRepoResponse])
 async def list_available_repositories(
@@ -139,11 +162,17 @@ async def link_repository_to_team(
     _: None = Depends(require_permission("MANAGE_TEAM")),
     db: Prisma = Depends(get_db)
 ):
-    """Links a synced repository to a specific team."""
+    """Links a synced repository to a specific team, ensuring exactly one repo per team."""
     # Verify team exists
     team = await db.team.find_unique(where={"id": team_id})
     if not team:
         raise HTTPException(status_code=404, detail="Team not found")
+        
+    # Unlink any existing repositories for this team to enforce 1-to-1 mapping
+    await db.githubrepository.update_many(
+        where={"teamId": team_id},
+        data={"teamId": None}
+    )
         
     repo = await db.githubrepository.update(
         where={"id": payload.repositoryId},
