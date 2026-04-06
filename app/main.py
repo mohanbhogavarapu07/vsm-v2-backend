@@ -78,10 +78,10 @@ def create_app() -> FastAPI:
     # ── CORS & Compression ─────────────────────────────────────────────────────
     app.add_middleware(
         CORSMiddleware,
-        allow_origins=["*"],
-        allow_credentials=False,
+        allow_origins=cors_origins or ["*"],
+        allow_credentials=True,
         allow_methods=["*"],
-        allow_headers=["*"],
+        allow_headers=["*", "ngrok-skip-browser-warning", "Authorization"],
     )
     app.add_middleware(GZipMiddleware, minimum_size=500)
 
