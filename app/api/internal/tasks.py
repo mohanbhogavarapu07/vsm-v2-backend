@@ -53,6 +53,7 @@ router = APIRouter(prefix="/tasks", tags=["tasks"], redirect_slashes=False)
 )
 async def create_task(
     payload: TaskCreateRequest,
+    x_user_id: int = Header(..., alias="X-User-ID"),
     _: None = Depends(require_permission("CREATE_TASK")),
     db: Prisma = Depends(get_db),
 ) -> TaskSchema:
@@ -65,6 +66,7 @@ async def create_task(
         current_status_id=payload.current_status_id,
         assignee_id=payload.assignee_id,
         priority=payload.priority,
+        updater_id=x_user_id
     )
     return TaskSchema.model_validate(task)
 
@@ -111,6 +113,7 @@ async def update_task(
     task_id: int = Path(...),
     payload: TaskUpdateRequest = ...,
     team_id: int = Query(..., description="Team ID for permission scope"),
+    x_user_id: int = Header(..., alias="X-User-ID"),
     _: None = Depends(require_permission("UPDATE_TASK")),
     db: Prisma = Depends(get_db),
 ) -> TaskSchema:
@@ -124,6 +127,7 @@ async def update_task(
         assignee_id=payload.assignee_id,
         priority=payload.priority,
         order=payload.order,
+        updater_id=x_user_id
     )
     return TaskSchema.model_validate(task)
 

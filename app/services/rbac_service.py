@@ -66,6 +66,19 @@ class RBACService:
         await self.get_team(team_id)
         return await self.repo.update_team(team_id, name)
 
+    async def delete_team(self, team_id: int):
+        team = await self.get_team(team_id)
+        
+        # Check if this is the last team in the project
+        project_teams = await self.repo.list_teams_by_project(team.projectId)
+        if len(project_teams) <= 1:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Cannot delete the last team in a project. A project must have at least one team."
+            )
+            
+        await self.repo.delete_team(team_id)
+
     async def get_team(self, team_id: int):
         team = await self.repo.get_team(team_id)
         if not team:
@@ -159,6 +172,17 @@ class RBACService:
                 ),
             )
 
+        # ── Check IF user is already a member (hard stop) ─────────────────────
+        user = await self.repo.get_user_by_email(email)
+        if user:
+            existing_member = await self.repo.get_member_by_user_team(user.id, team_id)
+            if existing_member:
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail=f"User with email {email} is already a member of this team",
+                )
+
+        # ── Check for existing pending invitation (trigger Re-Invite) ──────────
         if invited_by_user_id:
             user_exists = await self.repo.get_user_by_id(invited_by_user_id)
             if not user_exists:
@@ -169,17 +193,15 @@ class RBACService:
 
         # Persist invitation + role mapping (does NOT create membership yet)
         existing_inv = await self.repo.get_invitation_by_team_email(team_id, email)
+        
         if existing_inv and existing_inv.acceptedAt is None:
-            raise HTTPException(
-                status_code=status.HTTP_409_CONFLICT,
-                detail="User is already invited to this team",
-            )
-        if existing_inv and existing_inv.acceptedAt is not None:
-            raise HTTPException(
-                status_code=status.HTTP_409_CONFLICT,
-                detail="Invitation already accepted for this email",
-            )
-        inv = await self.repo.create_invitation(team_id, email, role_id, invited_by_user_id)
+            # Re-invite: Update role and proceed with email triggering
+            inv = await self.repo.update_invitation_role(existing_inv.id, role_id)
+            logger = logging.getLogger(__name__)
+            logger.info(f"Existing invitation {inv.id} for {email} UPDATED with role {role_id}. Re-sending email...")
+        else:
+            # Create new invitation
+            inv = await self.repo.create_invitation(team_id, email, role_id, invited_by_user_id)
         
         logger = logging.getLogger(__name__)
         logger.info(f"Invitation {inv.id} created for {email}. Triggering email via SMTP...")

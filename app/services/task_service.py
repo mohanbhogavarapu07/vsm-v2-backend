@@ -39,6 +39,7 @@ class TaskService:
         current_status_id: int | None = None,
         assignee_id: int | None = None,
         priority: str | None = None,
+        updater_id: int | None = None,
     ) -> Task:
         """Create a task scoped to the given team."""
         # Verify team exists
@@ -62,6 +63,58 @@ class TaskService:
             assignee_id=assignee_id,
             priority=priority,
         )
+
+        if assignee_id:
+            async def _safe_send_email():
+                try:
+                    # Fetch detailed info for the email using the newly created task's data
+                    member = await self._db.teammember.find_unique(
+                        where={"id": assignee_id},
+                        include={
+                            "user": True,
+                            "team": {
+                                "include": {"project": True}
+                            }
+                        }
+                    )
+                    
+                    if not (member and member.user and member.team and member.team.project):
+                        return
+
+                    # Get status name
+                    status_name = "To Do"
+                    if task.currentStatusId:
+                        curr_status = await self._db.taskstatus.find_unique(where={"id": task.currentStatusId})
+                        if curr_status:
+                            status_name = curr_status.name
+
+                    # Get updater name
+                    assigned_by = "Admin"
+                    if updater_id:
+                        updater = await self._db.user.find_unique(where={"id": updater_id})
+                        if updater:
+                            assigned_by = updater.name
+
+                    await send_task_assignment_email(
+                        user_email=member.user.email,
+                        user_name=member.user.name,
+                        task_title=task.title,
+                        project_name=member.team.project.name,
+                        team_name=member.team.name,
+                        task_id=task.id,
+                        project_id=member.team.project.id,
+                        team_id=member.team.id,
+                        priority=task.priority or "Normal",
+                        status_name=status_name,
+                        assigned_by=assigned_by
+                    )
+                except Exception as e:
+                    logger.error("Failed to send assignment email during creation: %s", str(e), exc_info=True)
+
+            # Fire and forget immediately
+            asyncio.create_task(_safe_send_email())
+
+        return task
 
     async def get_task(self, task_id: int) -> Task | None:
         return await self._task_repo.get_task_by_id(task_id)
@@ -87,6 +140,7 @@ class TaskService:
         assignee_id: int | None = None,
         priority: str | None = None,
         order: float | None = None,
+        updater_id: int | None = None,
     ) -> Task:
         task = await self.require_task(task_id)
         data: dict[str, Any] = {}
@@ -118,6 +172,7 @@ class TaskService:
         if trigger_email and assignee_id:
             async def _safe_send_email():
                 try:
+                    # Fetch detailed info for the email
                     member = await self._db.teammember.find_unique(
                         where={"id": assignee_id},
                         include={
@@ -127,14 +182,37 @@ class TaskService:
                             }
                         }
                     )
-                    if member and member.user and member.team and member.team.project:
-                        await send_task_assignment_email(
-                            user_email=member.user.email,
-                            user_name=member.user.name,
-                            task_title=title or task.title,
-                            project_name=member.team.project.name,
-                            team_name=member.team.name
-                        )
+                    
+                    if not (member and member.user and member.team and member.team.project):
+                        return
+
+                    # Get status name
+                    status_name = "To Do"
+                    if updated.currentStatusId:
+                        curr_status = await self._db.taskstatus.find_unique(where={"id": updated.currentStatusId})
+                        if curr_status:
+                            status_name = curr_status.name
+
+                    # Get updater name
+                    assigned_by = "Admin"
+                    if updater_id:
+                        updater = await self._db.user.find_unique(where={"id": updater_id})
+                        if updater:
+                            assigned_by = updater.name
+
+                    await send_task_assignment_email(
+                        user_email=member.user.email,
+                        user_name=member.user.name,
+                        task_title=updated.title,
+                        project_name=member.team.project.name,
+                        team_name=member.team.name,
+                        task_id=updated.id,
+                        project_id=member.team.project.id,
+                        team_id=member.team.id,
+                        priority=updated.priority or "Normal",
+                        status_name=status_name,
+                        assigned_by=assigned_by
+                    )
                 except Exception as e:
                     logger.error("Failed to send assignment email: %s", str(e), exc_info=True)
 
