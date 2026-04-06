@@ -10,8 +10,8 @@ generator client {
 
 datasource db {
   provider  = "postgresql"
-  url       = env("DATABASE_URL")       // Supabase pooled connection (pgbouncer)
-  directUrl = env("DIRECT_URL")         // Supabase direct connection (for migrations)
+  url       = env("DATABASE_URL") // Supabase pooled connection (pgbouncer)
+  directUrl = env("DIRECT_URL") // Supabase direct connection (for migrations)
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -136,22 +136,22 @@ enum DecisionSource {
 // ─────────────────────────────────────────────────────────────────────────────
 
 model User {
-  id             BigInt       @id @default(autoincrement())
-  email          String       @unique @db.VarChar(255)
-  name           String       @db.VarChar(255)
-  jobTitle       String?      @db.VarChar(100)
-  department     String?      @db.VarChar(100)
-  phone          String?      @db.VarChar(50)
-  bio            String?      @db.Text
-  bannerGradient String?      @db.VarChar(255)
-  createdAt      DateTime     @default(now())
-  updatedAt      DateTime     @updatedAt
+  id             BigInt   @id @default(autoincrement())
+  email          String   @unique @db.VarChar(255)
+  name           String   @db.VarChar(255)
+  jobTitle       String?  @db.VarChar(100)
+  department     String?  @db.VarChar(100)
+  phone          String?  @db.VarChar(50)
+  bio            String?  @db.Text
+  bannerGradient String?  @db.VarChar(255)
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
 
-  memberships       TeamMember[]
-  invitationsSent   TeamInvitation[] @relation("InvitationsSent")
-  chatMessages      ChatMessage[]
-  nlpFeedbacks      NLPFeedback[]
-  decisionFeedbacks DecisionFeedback[]
+  memberships        TeamMember[]
+  invitationsSent    TeamInvitation[]   @relation("InvitationsSent")
+  chatMessages       ChatMessage[]
+  nlpFeedbacks       NLPFeedback[]
+  decisionFeedbacks  DecisionFeedback[]
   unlinkedActivities UnlinkedActivity[]
 
   @@map("users")
@@ -176,7 +176,10 @@ model Project {
   createdAt     DateTime @default(now())
   updatedAt     DateTime @updatedAt
 
-  teams Team[]
+  teams               Team[]
+  roles               ProjectRole[]
+  taskStatuses        TaskStatus[]
+  workflowTransitions WorkflowTransition[]
 
   @@map("projects")
 }
@@ -188,36 +191,33 @@ model Team {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  project             Project              @relation(fields: [projectId], references: [id], onDelete: Cascade)
-  roles               TeamRole[]
-  members             TeamMember[]
-  invitations         TeamInvitation[]
-  sprints             Sprint[]
-  tasks               Task[]
-  taskStatuses        TaskStatus[]
-  workflowTransitions WorkflowTransition[]
-  chatMessages        ChatMessage[]
-  githubRepositories  GitHubRepository[]
+  project            Project            @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  members            TeamMember[]
+  invitations        TeamInvitation[]
+  sprints            Sprint[]
+  tasks              Task[]
+  githubRepositories GitHubRepository[]
+  chatMessages       ChatMessage[]
 
   @@index([projectId])
   @@map("teams")
 }
 
-model TeamRole {
-  id          BigInt       @id @default(autoincrement())
-  teamId      BigInt
-  name        String       @db.VarChar(100)
-  createdAt   DateTime     @default(now())
-  updatedAt   DateTime     @updatedAt
+model ProjectRole {
+  id        BigInt   @id @default(autoincrement())
+  projectId BigInt
+  name      String   @db.VarChar(100)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
-  team    Team         @relation(fields: [teamId], references: [id], onDelete: Cascade)
-  members TeamMember[]
+  project         Project          @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  members         TeamMember[]
   rolePermissions RolePermission[]
   invitations     TeamInvitation[]
 
-  @@unique([teamId, name])
-  @@index([teamId])
-  @@map("team_roles")
+  @@unique([projectId, name])
+  @@index([projectId])
+  @@map("project_roles")
 }
 
 model RolePermission {
@@ -226,7 +226,7 @@ model RolePermission {
   permissionId BigInt
   createdAt    DateTime @default(now())
 
-  role       TeamRole    @relation(fields: [roleId], references: [id], onDelete: Cascade)
+  role       ProjectRole @relation(fields: [roleId], references: [id], onDelete: Cascade)
   permission Permission  @relation(fields: [permissionId], references: [id], onDelete: Cascade)
 
   @@unique([roleId, permissionId])
@@ -243,10 +243,10 @@ model TeamMember {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  team   Team       @relation(fields: [teamId], references: [id], onDelete: Cascade)
-  user   User       @relation(fields: [userId], references: [id], onDelete: Cascade)
-  role   TeamRole   @relation(fields: [roleId], references: [id], onDelete: Restrict)
-  tasks  Task[]
+  team  Team        @relation(fields: [teamId], references: [id], onDelete: Cascade)
+  user  User        @relation(fields: [userId], references: [id], onDelete: Cascade)
+  role  ProjectRole @relation(fields: [roleId], references: [id], onDelete: Restrict)
+  tasks Task[]
 
   @@unique([teamId, userId])
   @@index([userId])
@@ -255,18 +255,18 @@ model TeamMember {
 }
 
 model TeamInvitation {
-  id          BigInt   @id @default(autoincrement())
+  id          BigInt    @id @default(autoincrement())
   teamId      BigInt
-  email       String   @db.VarChar(255)
+  email       String    @db.VarChar(255)
   roleId      BigInt
   invitedById BigInt?
   acceptedAt  DateTime?
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
 
-  team      Team      @relation(fields: [teamId], references: [id], onDelete: Cascade)
-  role      TeamRole  @relation(fields: [roleId], references: [id], onDelete: Restrict)
-  invitedBy User?     @relation("InvitationsSent", fields: [invitedById], references: [id], onDelete: SetNull)
+  team      Team        @relation(fields: [teamId], references: [id], onDelete: Cascade)
+  role      ProjectRole @relation(fields: [roleId], references: [id], onDelete: Restrict)
+  invitedBy User?       @relation("InvitationsSent", fields: [invitedById], references: [id], onDelete: SetNull)
 
   @@unique([teamId, email])
   @@index([teamId])
@@ -298,37 +298,37 @@ model Sprint {
 }
 
 model TaskStatus {
-  id             BigInt             @id @default(autoincrement())
-  teamId         BigInt
-  name           String             @db.VarChar(100)
-  category       TaskStatusCategory
-  stageOrder     Int                @default(0)
-  isTerminal     Boolean            @default(false)
-  createdAt      DateTime           @default(now())
-  updatedAt      DateTime           @updatedAt
+  id         BigInt             @id @default(autoincrement())
+  projectId  BigInt
+  name       String             @db.VarChar(100)
+  category   TaskStatusCategory
+  stageOrder Int                @default(0)
+  isTerminal Boolean            @default(false)
+  createdAt  DateTime           @default(now())
+  updatedAt  DateTime           @updatedAt
 
-  team            Team                 @relation(fields: [teamId], references: [id], onDelete: Cascade)
+  project         Project              @relation(fields: [projectId], references: [id], onDelete: Cascade)
   tasks           Task[]
   fromTransitions WorkflowTransition[] @relation("FromStatus")
   toTransitions   WorkflowTransition[] @relation("ToStatus")
 
-  @@unique([teamId, name])
-  @@index([teamId])
+  @@unique([projectId, name])
+  @@index([projectId])
   @@map("task_status")
 }
 
 model Task {
-  id              BigInt      @id @default(autoincrement())
+  id              BigInt       @id @default(autoincrement())
   teamId          BigInt
   sprintId        BigInt?
-  title           String      @db.VarChar(500)
+  title           String       @db.VarChar(500)
   description     String?
   priority        TaskPriority @default(MEDIUM)
-  order           Float       @default(1000)
+  order           Float        @default(1000)
   currentStatusId BigInt?
   assigneeId      BigInt?
-  createdAt       DateTime    @default(now())
-  updatedAt       DateTime    @updatedAt
+  createdAt       DateTime     @default(now())
+  updatedAt       DateTime     @updatedAt
 
   team          Team            @relation(fields: [teamId], references: [id], onDelete: Cascade)
   sprint        Sprint?         @relation(fields: [sprintId], references: [id], onDelete: SetNull)
@@ -345,7 +345,7 @@ model Task {
 
 model WorkflowTransition {
   id                     BigInt             @id @default(autoincrement())
-  teamId                 BigInt
+  projectId              BigInt
   fromStatusId           BigInt
   toStatusId             BigInt
   fromCategory           TaskStatusCategory
@@ -355,24 +355,24 @@ model WorkflowTransition {
   createdAt              DateTime           @default(now())
   updatedAt              DateTime           @updatedAt
 
-  team        Team                 @relation(fields: [teamId], references: [id], onDelete: Cascade)
-  fromStatus  TaskStatus           @relation("FromStatus", fields: [fromStatusId], references: [id])
-  toStatus    TaskStatus           @relation("ToStatus", fields: [toStatusId], references: [id])
-  conditions  TransitionCondition[]
+  project    Project               @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  fromStatus TaskStatus            @relation("FromStatus", fields: [fromStatusId], references: [id])
+  toStatus   TaskStatus            @relation("ToStatus", fields: [toStatusId], references: [id])
+  conditions TransitionCondition[]
 
-  @@index([teamId])
+  @@index([projectId])
   @@index([fromStatusId])
   @@map("workflow_transitions")
 }
 
 model TransitionCondition {
-  id             BigInt            @id @default(autoincrement())
-  transitionId   BigInt
-  conditionType  ConditionType
-  operator       ConditionOperator @default(AND)
-  expectedValue  String?           @db.VarChar(50)
-  createdAt      DateTime          @default(now())
-  updatedAt      DateTime          @updatedAt
+  id            BigInt            @id @default(autoincrement())
+  transitionId  BigInt
+  conditionType ConditionType
+  operator      ConditionOperator @default(AND)
+  expectedValue String?           @db.VarChar(50)
+  createdAt     DateTime          @default(now())
+  updatedAt     DateTime          @updatedAt
 
   transition WorkflowTransition @relation(fields: [transitionId], references: [id], onDelete: Cascade)
 
@@ -426,14 +426,14 @@ model EventProcessingQueue {
 }
 
 model EventAggregationWindow {
-  id                BigInt       @id @default(autoincrement())
-  correlationId     String       @db.VarChar(255)
-  startTime         DateTime
-  endTime           DateTime?
-  aggregatedEvents  Json         
-  status            WindowStatus @default(OPEN)
-  createdAt         DateTime     @default(now())
-  updatedAt         DateTime     @updatedAt
+  id               BigInt       @id @default(autoincrement())
+  correlationId    String       @db.VarChar(255)
+  startTime        DateTime
+  endTime          DateTime?
+  aggregatedEvents Json
+  status           WindowStatus @default(OPEN)
+  createdAt        DateTime     @default(now())
+  updatedAt        DateTime     @updatedAt
 
   @@index([correlationId])
   @@index([status])
@@ -507,7 +507,7 @@ model GitHubInstallation {
   id          BigInt   @id // GitHub's installation_id
   accountName String   @db.VarChar(255)
   appId       String   @db.VarChar(100)
-  targetId    BigInt   // GitHub Account ID
+  targetId    BigInt // GitHub Account ID
   targetType  String   @db.VarChar(50) // User or Organization
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
@@ -540,14 +540,14 @@ model GitHubRepository {
 // ─────────────────────────────────────────────────────────────────────────────
 
 model ChatMessage {
-  id                BigInt     @id @default(autoincrement())
+  id                BigInt   @id @default(autoincrement())
   userId            BigInt
   teamId            BigInt
   message           String
   timestamp         DateTime
-  platformMessageId String?    @unique @db.VarChar(255)
-  createdAt         DateTime   @default(now())
-  updatedAt         DateTime   @updatedAt
+  platformMessageId String?  @unique @db.VarChar(255)
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
 
   user     User         @relation(fields: [userId], references: [id])
   team     Team         @relation(fields: [teamId], references: [id])
@@ -579,13 +579,13 @@ model NLPInsight {
 }
 
 model NLPFeedback {
-  id               BigInt          @id @default(autoincrement())
-  insightId        BigInt
-  userId           BigInt
-  feedback         FeedbackResult
-  correctedIntent  CorrectedIntent?
-  createdAt        DateTime        @default(now())
-  updatedAt        DateTime        @updatedAt
+  id              BigInt           @id @default(autoincrement())
+  insightId       BigInt
+  userId          BigInt
+  feedback        FeedbackResult
+  correctedIntent CorrectedIntent?
+  createdAt       DateTime         @default(now())
+  updatedAt       DateTime         @updatedAt
 
   insight NLPInsight @relation(fields: [insightId], references: [id], onDelete: Cascade)
   user    User       @relation(fields: [userId], references: [id])

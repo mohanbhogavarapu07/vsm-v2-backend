@@ -51,7 +51,7 @@ class RoleUpdateRequest(BaseModel):
 
 class RoleResponse(BaseModel):
     id: int
-    teamId: int
+    projectId: int
     name: str
     permission_codes: List[str]
     createdAt: datetime
@@ -125,7 +125,7 @@ class TaskStatusUpdateRequest(BaseModel):
 
 class TaskStatusResponse(BaseModel):
     id: int
-    teamId: int
+    projectId: int
     name: str
     category: str
     stageOrder: int
@@ -144,7 +144,7 @@ class WorkflowTransitionCreateRequest(BaseModel):
 
 class WorkflowTransitionResponse(BaseModel):
     id: int
-    teamId: int
+    projectId: int
     fromStatusId: int
     toStatusId: int
     requiresManualApproval: bool

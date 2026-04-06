@@ -109,7 +109,7 @@ async def create_team(
     db: Prisma = Depends(get_db),
 ):
     svc = RBACService(db)
-    return await svc.create_team(project_id, payload.name, creator_user_id=x_user_id, copy_from_team_id=payload.copy_from_team_id)
+    return await svc.create_team(project_id, payload.name, creator_user_id=x_user_id)
 
 
 @router.get(
@@ -173,28 +173,22 @@ async def delete_team(
 # ─────────────────────────────────────────────────────────────────────────────
 
 @router.post(
-    "/teams/{team_id}/roles",
+    "/projects/{project_id}/roles",
     response_model=RoleResponse,
     status_code=status.HTTP_201_CREATED,
-    summary="[Step 3 - MANDATORY] Create a custom role with permissions [requires MANAGE_ROLES]",
-    description=(
-        "Scrum must define roles before inviting any users. "
-        "Role names are 100% user-defined (e.g. 'QA', 'Intern', 'Tech Lead'). "
-        "Permissions are selected from the predefined `Permission` enum."
-    ),
+    summary="[Step 1] Create a project-level role",
 )
 async def create_role(
-    team_id: int = Path(...),
+    project_id: int = Path(...),
     payload: RoleCreateRequest = ...,
-    _: None = Depends(require_permission("MANAGE_ROLES")),
     db: Prisma = Depends(get_db),
 ):
     svc = RBACService(db)
-    role = await svc.create_role(team_id, payload.name, payload.permission_codes)
+    role = await svc.create_role(project_id, payload.name, payload.permission_codes)
     codes = await svc.repo.get_role_permission_codes(role.id)
     return {
         "id": role.id,
-        "teamId": role.teamId,
+        "projectId": role.projectId,
         "name": role.name,
         "permission_codes": codes,
         "createdAt": role.createdAt,
@@ -203,24 +197,23 @@ async def create_role(
 
 
 @router.get(
-    "/teams/{team_id}/roles",
+    "/projects/{project_id}/roles",
     response_model=list[RoleResponse],
-    summary="List all roles defined for a team (used for invitation dropdown)",
+    summary="List all roles defined for a project",
 )
 async def list_roles(
-    team_id: int = Path(...),
+    project_id: int = Path(...),
     db: Prisma = Depends(get_db),
 ):
     svc = RBACService(db)
-    roles = await svc.get_team_roles(team_id)
-    role_ids = [r.id for r in roles]
+    roles = await svc.get_project_roles(project_id)
     perms_by_role: dict[int, list[str]] = {}
-    for rid in role_ids:
-        perms_by_role[int(rid)] = await svc.repo.get_role_permission_codes(rid)
+    for r in roles:
+        perms_by_role[int(r.id)] = await svc.repo.get_role_permission_codes(r.id)
     return [
         {
             "id": r.id,
-            "teamId": r.teamId,
+            "projectId": r.projectId,
             "name": r.name,
             "permission_codes": perms_by_role.get(int(r.id), []),
             "createdAt": r.createdAt,
@@ -231,23 +224,22 @@ async def list_roles(
 
 
 @router.patch(
-    "/teams/{team_id}/roles/{role_id}",
+    "/projects/{project_id}/roles/{role_id}",
     response_model=RoleResponse,
-    summary="Update a role's name or permissions [requires MANAGE_ROLES]",
+    summary="Update a project-level role",
 )
 async def update_role(
-    team_id: int = Path(...),
+    project_id: int = Path(...),
     role_id: int = Path(...),
     payload: RoleUpdateRequest = ...,
-    _: None = Depends(require_permission("MANAGE_ROLES")),
     db: Prisma = Depends(get_db),
 ):
     svc = RBACService(db)
-    role = await svc.update_role(team_id, role_id, payload.name, payload.permission_codes)
+    role = await svc.update_role(project_id, role_id, payload.name, payload.permission_codes)
     codes = await svc.repo.get_role_permission_codes(role.id)
     return {
         "id": role.id,
-        "teamId": role.teamId,
+        "projectId": role.projectId,
         "name": role.name,
         "permission_codes": codes,
         "createdAt": role.createdAt,
@@ -256,18 +248,17 @@ async def update_role(
 
 
 @router.delete(
-    "/teams/{team_id}/roles/{role_id}",
+    "/projects/{project_id}/roles/{role_id}",
     status_code=status.HTTP_204_NO_CONTENT,
-    summary="Delete a role (only if no members are assigned) [requires MANAGE_ROLES]",
+    summary="Delete a project-level role",
 )
 async def delete_role(
-    team_id: int = Path(...),
+    project_id: int = Path(...),
     role_id: int = Path(...),
-    _: None = Depends(require_permission("MANAGE_ROLES")),
     db: Prisma = Depends(get_db),
 ):
     svc = RBACService(db)
-    await svc.delete_role(team_id, role_id)
+    await svc.delete_role(project_id, role_id)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -275,24 +266,19 @@ async def delete_role(
 # ─────────────────────────────────────────────────────────────────────────────
 
 @router.post(
-    "/teams/{team_id}/workflow/statuses",
+    "/projects/{project_id}/workflow/statuses",
     response_model=TaskStatusResponse,
     status_code=status.HTTP_201_CREATED,
-    summary="[Step 4] Create a custom board column (e.g. 'To Do', 'In Review')",
-    description=(
-        "Define the Kanban board columns for this team. Each status has a "
-        "`category` that the AI uses for abstract reasoning (BACKLOG/ACTIVE/REVIEW/DONE/BLOCKED). "
-        "`stage_order` controls left-to-right order on the board."
-    ),
+    summary="[Step 4] Create a project-level board column",
 )
 async def create_task_status(
-    team_id: int = Path(...),
+    project_id: int = Path(...),
     payload: TaskStatusCreateRequest = ...,
     db: Prisma = Depends(get_db),
 ):
     svc = RBACService(db)
     return await svc.create_task_status(
-        team_id=team_id,
+        project_id=project_id,
         name=payload.name,
         category=payload.category.value,
         stage_order=payload.stage_order,
@@ -301,63 +287,63 @@ async def create_task_status(
 
 
 @router.get(
-    "/teams/{team_id}/workflow/statuses",
+    "/projects/{project_id}/workflow/statuses",
     response_model=list[TaskStatusResponse],
-    summary="Get all board columns for a team (ordered by stage)",
+    summary="Get all board columns for a project",
 )
 async def list_task_statuses(
-    team_id: int = Path(...),
+    project_id: int = Path(...),
     db: Prisma = Depends(get_db),
 ):
     svc = RBACService(db)
-    return await svc.list_task_statuses(team_id)
+    return await svc.list_task_statuses(project_id)
 
 
 @router.patch(
-    "/teams/{team_id}/workflow/statuses/{status_id}",
+    "/projects/{project_id}/workflow/statuses/{status_id}",
     response_model=TaskStatusResponse,
     summary="Update a board column",
 )
 async def update_task_status(
-    team_id: int = Path(...),
+    project_id: int = Path(...),
     status_id: int = Path(...),
     payload: TaskStatusUpdateRequest = ...,
     db: Prisma = Depends(get_db),
 ):
     svc = RBACService(db)
     return await svc.update_task_status(
-        team_id, status_id, payload.name, payload.stage_order, payload.is_terminal
+        project_id, status_id, payload.name, payload.stage_order, payload.is_terminal
     )
 
 
 @router.delete(
-    "/teams/{team_id}/workflow/statuses/{status_id}",
+    "/projects/{project_id}/workflow/statuses/{status_id}",
     status_code=status.HTTP_204_NO_CONTENT,
     summary="Delete a board column",
 )
 async def delete_task_status(
-    team_id: int = Path(...),
+    project_id: int = Path(...),
     status_id: int = Path(...),
     db: Prisma = Depends(get_db),
 ):
     svc = RBACService(db)
-    await svc.delete_task_status(team_id, status_id)
+    await svc.delete_task_status(project_id, status_id)
 
 
 @router.post(
-    "/teams/{team_id}/workflow/transitions",
+    "/projects/{project_id}/workflow/transitions",
     response_model=WorkflowTransitionResponse,
     status_code=status.HTTP_201_CREATED,
-    summary="Define allowed status movement (e.g. 'To Do' → 'In Progress')",
+    summary="Define allowed status movement",
 )
 async def create_workflow_transition(
-    team_id: int = Path(...),
+    project_id: int = Path(...),
     payload: WorkflowTransitionCreateRequest = ...,
     db: Prisma = Depends(get_db),
 ):
     svc = RBACService(db)
     result = await svc.create_workflow_transition(
-        team_id=team_id,
+        project_id=project_id,
         from_status_id=payload.from_status_id,
         to_status_id=payload.to_status_id,
         requires_manual_approval=payload.requires_manual_approval,
@@ -366,31 +352,31 @@ async def create_workflow_transition(
 
 
 @router.get(
-    "/teams/{team_id}/workflow/transitions",
+    "/projects/{project_id}/workflow/transitions",
     response_model=list[WorkflowTransitionResponse],
-    summary="List all allowed workflow transitions for a team",
+    summary="List all allowed workflow transitions for a project",
 )
 async def list_workflow_transitions(
-    team_id: int = Path(...),
+    project_id: int = Path(...),
     db: Prisma = Depends(get_db),
 ):
     svc = RBACService(db)
-    transitions = await svc.list_workflow_transitions(team_id)
+    transitions = await svc.list_workflow_transitions(project_id)
     return [_serialize_transition(t) for t in transitions]
 
 
 @router.delete(
-    "/teams/{team_id}/workflow/transitions/{transition_id}",
+    "/projects/{project_id}/workflow/transitions/{transition_id}",
     status_code=status.HTTP_204_NO_CONTENT,
     summary="Remove a workflow transition rule",
 )
 async def delete_workflow_transition(
-    team_id: int = Path(...),
+    project_id: int = Path(...),
     transition_id: int = Path(...),
     db: Prisma = Depends(get_db),
 ):
     svc = RBACService(db)
-    await svc.delete_workflow_transition(team_id, transition_id)
+    await svc.delete_workflow_transition(project_id, transition_id)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -578,7 +564,7 @@ async def my_permissions(
 def _serialize_transition(t) -> dict:
     return {
         "id": t.id,
-        "teamId": t.teamId,
+        "projectId": t.projectId,
         "fromStatusId": t.fromStatusId,
         "toStatusId": t.toStatusId,
         "requiresManualApproval": t.requiresManualApproval,

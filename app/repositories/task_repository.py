@@ -97,25 +97,25 @@ class TaskRepository:
             where={"id": status_id}
         )
 
-    async def get_status_by_category(
-        self, team_id: int, category: TaskStatusCategory
+    async def get_status_by_category_project(
+        self, project_id: int, category: TaskStatusCategory
     ) -> TaskStatus | None:
         return await self._db.taskstatus.find_first(
             where={
-                "teamId": team_id,
+                "projectId": project_id,
                 "category": category.value,
             }
         )
 
-    async def list_statuses(self, team_id: int) -> list[TaskStatus]:
+    async def list_statuses_by_project(self, project_id: int) -> list[TaskStatus]:
         return await self._db.taskstatus.find_many(
-            where={"teamId": team_id},
+            where={"projectId": project_id},
             order={"stageOrder": "asc"},
         )
 
     async def create_status(
         self,
-        team_id: int,
+        project_id: int,
         name: str,
         category: TaskStatusCategory,
         stage_order: int = 0,
@@ -123,7 +123,7 @@ class TaskRepository:
     ) -> TaskStatus:
         return await self._db.taskstatus.create(
             data={
-                "teamId": team_id,
+                "projectId": project_id,
                 "name": name,
                 "category": category.value,
                 "stageOrder": stage_order,
@@ -133,13 +133,13 @@ class TaskRepository:
 
     # ── WorkflowTransition ─────────────────────────────────────────────────────
 
-    async def get_valid_transitions(
-        self, team_id: int, from_status_id: int
+    async def get_valid_transitions_by_project(
+        self, project_id: int, from_status_id: int
     ) -> list[WorkflowTransition]:
         """Returns valid transitions from current status, with conditions loaded."""
         return await self._db.workflowtransition.find_many(
             where={
-                "teamId": team_id,
+                "projectId": project_id,
                 "fromStatusId": from_status_id,
             },
             include={
@@ -149,15 +149,15 @@ class TaskRepository:
             order={"priority": "desc"},
         )
 
-    async def get_transitions_by_category(
+    async def get_transitions_by_category_project(
         self,
-        team_id: int,
+        project_id: int,
         from_category: TaskStatusCategory,
     ) -> list[WorkflowTransition]:
         """AI uses category-based lookups for cross-org reasoning."""
         return await self._db.workflowtransition.find_many(
             where={
-                "teamId": team_id,
+                "projectId": project_id,
                 "fromCategory": from_category.value,
             },
             include={

@@ -119,66 +119,21 @@ class RBACRepository:
     async def delete_team(self, team_id: int):
         return await self.db.team.delete(where={"id": team_id})
 
-    async def copy_team_config(self, copy_from_team_id: int, new_team_id: int, creator_user_id: int | None = None):
-        # 1. Copy Roles
-        old_roles = await self.db.teamrole.find_many(where={"teamId": copy_from_team_id}, include={"rolePermissions": True})
-        role_map = {} 
-        admin_role_id = None
-        for old_role in old_roles:
-            new_role = await self.db.teamrole.create(data={"teamId": new_team_id, "name": old_role.name})
-            role_map[old_role.id] = new_role.id
-            if old_role.name.lower() == "admin" or old_role.name.lower() == "owner":
-                admin_role_id = new_role.id
-            if old_role.rolePermissions:
-                permission_ids = [rp.permissionId for rp in old_role.rolePermissions]
-                await self.replace_role_permissions(new_role.id, permission_ids)
-                
-        # if creator is provided, assign them to the admin role
-        if creator_user_id and role_map:
-            best_role = admin_role_id or list(role_map.values())[0]
-            await self.create_team_member(new_team_id, creator_user_id, best_role)
-
-        # 2. Copy Workflow statuses
-        old_statuses = await self.db.taskstatus.find_many(where={"teamId": copy_from_team_id})
-        status_map = {}
-        for old_status in old_statuses:
-            new_status = await self.db.taskstatus.create(
-                data={
-                    "teamId": new_team_id,
-                    "name": old_status.name,
-                    "category": old_status.category,
-                    "stageOrder": old_status.stageOrder,
-                    "isTerminal": old_status.isTerminal,
-                }
-            )
-            status_map[old_status.id] = new_status.id
-
-        # 3. Copy Workflow transitions
-        old_transitions = await self.db.workflowtransition.find_many(where={"teamId": copy_from_team_id})
-        for old_trans in old_transitions:
-            if old_trans.fromStatusId in status_map and old_trans.toStatusId in status_map:
-                await self.db.workflowtransition.create(
-                    data={
-                        "teamId": new_team_id,
-                        "fromStatusId": status_map[old_trans.fromStatusId],
-                        "toStatusId": status_map[old_trans.toStatusId],
-                        "fromCategory": old_trans.fromCategory,
-                        "toCategory": old_trans.toCategory,
-                        "requiresManualApproval": old_trans.requiresManualApproval,
-                    }
-                )
+    async def get_project_context_for_team(self, team_id: int):
+        team = await self.db.team.find_unique(where={"id": team_id})
+        return team.projectId if team else None
 
     # ── Roles ─────────────────────────────────────────────────────────────────
 
-    async def create_role(self, team_id: int, name: str):
-        return await self.db.teamrole.create(data={"teamId": team_id, "name": name})
+    async def create_role(self, project_id: int, name: str):
+        return await self.db.projectrole.create(data={"projectId": project_id, "name": name})
 
     async def get_role_by_id(self, role_id: int):
-        return await self.db.teamrole.find_unique(where={"id": role_id})
+        return await self.db.projectrole.find_unique(where={"id": role_id})
 
-    async def get_roles_by_team(self, team_id: int):
-        return await self.db.teamrole.find_many(
-            where={"teamId": team_id},
+    async def get_roles_by_project(self, project_id: int):
+        return await self.db.projectrole.find_many(
+            where={"projectId": project_id},
             order={"name": "asc"},
         )
 
@@ -186,10 +141,10 @@ class RBACRepository:
         data = {}
         if name is not None:
             data["name"] = name
-        return await self.db.teamrole.update(where={"id": role_id}, data=data)
+        return await self.db.projectrole.update(where={"id": role_id}, data=data)
 
     async def delete_role(self, role_id: int):
-        return await self.db.teamrole.delete(where={"id": role_id})
+        return await self.db.projectrole.delete(where={"id": role_id})
 
     # ── Permissions / Role-Permissions ────────────────────────────────────────
 
@@ -221,8 +176,8 @@ class RBACRepository:
         )
         return [r.permission.code for r in rows if getattr(r, "permission", None)]
 
-    async def get_team_role_with_permissions(self, role_id: int):
-        return await self.db.teamrole.find_unique(
+    async def get_project_role_with_permissions(self, role_id: int):
+        return await self.db.projectrole.find_unique(
             where={"id": role_id},
             include={"rolePermissions": {"include": {"permission": True}}},
         )
@@ -312,7 +267,7 @@ class RBACRepository:
 
     async def create_task_status(
         self,
-        team_id: int,
+        project_id: int,
         name: str,
         category: str,
         stage_order: int,
@@ -320,7 +275,7 @@ class RBACRepository:
     ):
         return await self.db.taskstatus.create(
             data={
-                "teamId": team_id,
+                "projectId": project_id,
                 "name": name,
                 "category": category,
                 "stageOrder": stage_order,
@@ -328,9 +283,9 @@ class RBACRepository:
             }
         )
 
-    async def list_task_statuses(self, team_id: int):
+    async def list_task_statuses(self, project_id: int):
         return await self.db.taskstatus.find_many(
-            where={"teamId": team_id},
+            where={"projectId": project_id},
             order={"stageOrder": "asc"},
         )
 
@@ -356,7 +311,7 @@ class RBACRepository:
 
     async def create_workflow_transition(
         self,
-        team_id: int,
+        project_id: int,
         from_status_id: int,
         to_status_id: int,
         from_category: str,
@@ -365,7 +320,7 @@ class RBACRepository:
     ):
         return await self.db.workflowtransition.create(
             data={
-                "teamId": team_id,
+                "projectId": project_id,
                 "fromStatusId": from_status_id,
                 "toStatusId": to_status_id,
                 "fromCategory": from_category,
@@ -374,9 +329,9 @@ class RBACRepository:
             }
         )
 
-    async def list_workflow_transitions(self, team_id: int):
+    async def list_workflow_transitions(self, project_id: int):
         return await self.db.workflowtransition.find_many(
-            where={"teamId": team_id},
+            where={"projectId": project_id},
             include={"fromStatus": True, "toStatus": True},
             order={"priority": "desc"},
         )

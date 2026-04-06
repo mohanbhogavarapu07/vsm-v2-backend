@@ -47,14 +47,14 @@ class TaskService:
         if not team:
             raise HTTPException(status_code=404, detail="Team not found")
 
-        # SAFETY NET: If no status provided, use the first status in the workflow
+        # SAFETY NET: If no status provided, use the first status in the project workflow
         if current_status_id is None:
-            statuses = await self._task_repo.list_statuses(team_id)
+            statuses = await self._task_repo.list_statuses_by_project(team.projectId)
             if statuses:
                 current_status_id = int(statuses[0].id)
-                logger.info("Auto-assigned default status %s to new task: %s", current_status_id, title)
+                logger.info("Auto-assigned default status %s from project %s to new task: %s", current_status_id, team.projectId, title)
 
-        return await self._task_repo.create_task(
+        task = await self._task_repo.create_task(
             team_id=team_id,
             title=title,
             description=description,
@@ -364,12 +364,18 @@ class TaskService:
 
     # ── Decisions ─────────────────────────────────────────────────────────────
 
-    async def get_valid_transitions(self, task_id: int, team_id: int):
-        task = await self._task_repo.get_task_by_id(task_id)
+    async def get_valid_transitions(self, task_id: int):
+        task = await self.require_task(task_id)
         if not task or not task.currentStatusId:
             return []
-        return await self._task_repo.get_valid_transitions(
-            team_id=team_id,
+        
+        # Resolve project from team
+        team = await self._rbac_repo.get_team(task.teamId)
+        if not team:
+            return []
+
+        return await self._task_repo.get_valid_transitions_by_project(
+            project_id=team.projectId,
             from_status_id=task.currentStatusId,
         )
 
