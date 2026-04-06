@@ -66,6 +66,19 @@ class RBACService:
         await self.get_team(team_id)
         return await self.repo.update_team(team_id, name)
 
+    async def delete_team(self, team_id: int):
+        team = await self.get_team(team_id)
+        
+        # Check if this is the last team in the project
+        project_teams = await self.repo.list_teams_by_project(team.projectId)
+        if len(project_teams) <= 1:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Cannot delete the last team in a project. A project must have at least one team."
+            )
+            
+        await self.repo.delete_team(team_id)
+
     async def get_team(self, team_id: int):
         team = await self.repo.get_team(team_id)
         if not team:
