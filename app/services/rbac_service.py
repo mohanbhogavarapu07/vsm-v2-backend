@@ -39,6 +39,15 @@ class RBACService:
 
     async def create_team(self, project_id: int, name: str, creator_user_id: int | None = None, copy_from_team_id: int | None = None):
         await self.get_project(project_id)  # validates project exists
+        
+        if creator_user_id:
+            user_exists = await self.repo.get_user_by_id(creator_user_id)
+            if not user_exists:
+                raise HTTPException(
+                    status_code=status.HTTP_401_UNAUTHORIZED,
+                    detail="Authenticated user no longer exists in backend. Please sign out and sign back in to re-sync."
+                )
+
         team = await self.repo.create_team(project_id, name)
         
         if copy_from_team_id:
@@ -149,6 +158,14 @@ class RBACService:
                     "Use GET /teams/{team_id}/roles to see available roles."
                 ),
             )
+
+        if invited_by_user_id:
+            user_exists = await self.repo.get_user_by_id(invited_by_user_id)
+            if not user_exists:
+                raise HTTPException(
+                    status_code=status.HTTP_401_UNAUTHORIZED,
+                    detail="Authenticated user no longer exists in backend. Please sign out and sign back in to re-sync."
+                )
 
         # Persist invitation + role mapping (does NOT create membership yet)
         existing_inv = await self.repo.get_invitation_by_team_email(team_id, email)
