@@ -154,6 +154,20 @@ async def update_team(
     return await svc.update_team(team_id, payload.name)
 
 
+@router.delete(
+    "/teams/{team_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    summary="Delete a team (cascading delete) [requires MANAGE_TEAM]",
+)
+async def delete_team(
+    team_id: int = Path(...),
+    _: None = Depends(require_permission("MANAGE_TEAM")),
+    db: Prisma = Depends(get_db),
+):
+    svc = RBACService(db)
+    await svc.delete_team(team_id)
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # STEP 3 — ROLES + PERMISSIONS (MANDATORY before inviting users)
 # ─────────────────────────────────────────────────────────────────────────────

@@ -116,6 +116,9 @@ class RBACRepository:
             data["name"] = name
         return await self.db.team.update(where={"id": team_id}, data=data)
 
+    async def delete_team(self, team_id: int):
+        return await self.db.team.delete(where={"id": team_id})
+
     async def copy_team_config(self, copy_from_team_id: int, new_team_id: int, creator_user_id: int | None = None):
         # 1. Copy Roles
         old_roles = await self.db.teamrole.find_many(where={"teamId": copy_from_team_id}, include={"rolePermissions": True})

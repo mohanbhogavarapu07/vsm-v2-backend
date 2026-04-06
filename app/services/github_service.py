@@ -159,8 +159,7 @@ class GitHubService:
         repos = await self.list_installation_repositories(installation_id)
         logger.info(f"Retrieved {len(repos)} repositories from GitHub for installation {installation_id}")
         
-        # Ensure we only automatically link ONE repository upon installation
-        team_repo_set = False
+
         
         synced_repos = []
         for r in repos:
@@ -178,16 +177,6 @@ class GitHubService:
                         "installationId": installation_id
                     }
                     
-                    # Strictly enforce 1-to-1 repository-to-team mapping during auto-sync
-                    if team_id and not team_repo_set:
-                        # Unlink any existing repositories for this team
-                        await db.githubrepository.update_many(
-                            where={"teamId": team_id},
-                            data={"teamId": None}
-                        )
-                        repo_data["teamId"] = team_id
-                        team_repo_set = True
-                    
                     upserted = await db.githubrepository.upsert(
                         where={"id": r["id"]},
                         data={
@@ -196,7 +185,7 @@ class GitHubService:
                                 "name": r["name"],
                                 "fullName": r["full_name"],
                                 "installationId": installation_id,
-                                "teamId": repo_data.get("teamId", existing.teamId if existing else None)
+                                "teamId": existing.teamId if existing else None # Preserve existing linkage
                             }
                         }
                     )

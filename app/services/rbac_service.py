@@ -39,6 +39,15 @@ class RBACService:
 
     async def create_team(self, project_id: int, name: str, creator_user_id: int | None = None, copy_from_team_id: int | None = None):
         await self.get_project(project_id)  # validates project exists
+        
+        if creator_user_id:
+            user_exists = await self.repo.get_user_by_id(creator_user_id)
+            if not user_exists:
+                raise HTTPException(
+                    status_code=status.HTTP_401_UNAUTHORIZED,
+                    detail="Authenticated user no longer exists in backend. Please sign out and sign back in to re-sync."
+                )
+
         team = await self.repo.create_team(project_id, name)
         
         if copy_from_team_id:
@@ -56,6 +65,19 @@ class RBACService:
     async def update_team(self, team_id: int, name: str | None):
         await self.get_team(team_id)
         return await self.repo.update_team(team_id, name)
+
+    async def delete_team(self, team_id: int):
+        team = await self.get_team(team_id)
+        
+        # Check if this is the last team in the project
+        project_teams = await self.repo.list_teams_by_project(team.projectId)
+        if len(project_teams) <= 1:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Cannot delete the last team in a project. A project must have at least one team."
+            )
+            
+        await self.repo.delete_team(team_id)
 
     async def get_team(self, team_id: int):
         team = await self.repo.get_team(team_id)
@@ -161,6 +183,15 @@ class RBACService:
                 )
 
         # ── Check for existing pending invitation (trigger Re-Invite) ──────────
+        if invited_by_user_id:
+            user_exists = await self.repo.get_user_by_id(invited_by_user_id)
+            if not user_exists:
+                raise HTTPException(
+                    status_code=status.HTTP_401_UNAUTHORIZED,
+                    detail="Authenticated user no longer exists in backend. Please sign out and sign back in to re-sync."
+                )
+
+        # Persist invitation + role mapping (does NOT create membership yet)
         existing_inv = await self.repo.get_invitation_by_team_email(team_id, email)
         
         if existing_inv and existing_inv.acceptedAt is None:

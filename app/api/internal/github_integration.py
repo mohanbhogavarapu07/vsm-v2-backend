@@ -53,6 +53,7 @@ async def github_callback(
     installation_id: int = Query(...),
     setup_action: str = Query(...),
     state: str | None = Query(None), # This will be our team_id
+    from_frontend: bool = Query(False),
     db: Prisma = Depends(get_db)
 ):
     """
@@ -89,6 +90,9 @@ async def github_callback(
         from app.config import get_settings
         settings = get_settings()
         
+        if from_frontend:
+            raise HTTPException(status_code=500, detail=str(e))
+            
         # Dynamic error redirect
         origin = request.headers.get("referer") or request.headers.get("origin")
         target_base = settings.frontend_url
@@ -102,6 +106,9 @@ async def github_callback(
             status_code=status.HTTP_302_FOUND
         )
     
+    if from_frontend:
+        return {"status": "success", "team_id": team_id}
+        
     from app.config import get_settings
     settings = get_settings()
     
