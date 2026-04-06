@@ -136,11 +136,16 @@ enum DecisionSource {
 // ─────────────────────────────────────────────────────────────────────────────
 
 model User {
-  id        BigInt       @id @default(autoincrement())
-  email     String       @unique @db.VarChar(255)
-  name      String       @db.VarChar(255)
-  createdAt DateTime     @default(now())
-  updatedAt DateTime     @updatedAt
+  id             BigInt       @id @default(autoincrement())
+  email          String       @unique @db.VarChar(255)
+  name           String       @db.VarChar(255)
+  jobTitle       String?      @db.VarChar(100)
+  department     String?      @db.VarChar(100)
+  phone          String?      @db.VarChar(50)
+  bio            String?      @db.Text
+  bannerGradient String?      @db.VarChar(255)
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
 
   memberships       TeamMember[]
   invitationsSent   TeamInvitation[] @relation("InvitationsSent")
