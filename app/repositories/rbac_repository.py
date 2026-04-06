@@ -302,6 +302,12 @@ class RBACRepository:
             data={"acceptedAt": datetime.now(timezone.utc)},
         )
 
+    async def update_invitation_role(self, invitation_id: int, role_id: int):
+        return await self.db.teaminvitation.update(
+            where={"id": invitation_id},
+            data={"roleId": role_id}
+        )
+
     # ── Workflow: TaskStatus ───────────────────────────────────────────────────
 
     async def create_task_status(
