@@ -72,9 +72,14 @@ async def _process_event(task_instance: Task, event_id: int, queue_id: int) -> d
                     logger.info("Matched event %s to team %s", event_id, target_team_id)
 
             if event.eventType in (EventType.PR_CREATED.value, EventType.PR_MERGED.value):
-                branch = payload.get("pull_request", {}).get("head", {}).get("ref")
+                pr = payload.get("pull_request", {})
+                branch = pr.get("head", {}).get("ref")
+                title = pr.get("title", "")
+                body = pr.get("body", "")
                 pr_num = str(payload.get("number", ""))
-                task_id = _extract_task_id_from_branch(branch)
+                
+                # Check branch, then title, then body for task_id
+                task_id = _extract_task_id(branch) or _extract_task_id(title) or _extract_task_id(body)
                 
                 # Verify task belongs to team if team is known
                 if task_id and target_team_id:
@@ -102,8 +107,10 @@ async def _process_event(task_instance: Task, event_id: int, queue_id: int) -> d
                 commits = payload.get("commits", [])
                 for commit in commits:
                     branch = _extract_branch(payload.get("ref", ""))
-                    task_id = _extract_task_id_from_branch(branch)
                     commit_msg = commit.get("message", "")
+                    
+                    # Check branch, then commit message
+                    task_id = _extract_task_id(branch) or _extract_task_id(commit_msg)
 
                     # Verify task belongs to team if team is known
                     if task_id and target_team_id:
@@ -170,8 +177,9 @@ async def _retry_failed_events() -> None:
             process_event.delay(entry.eventId, entry.id)
 
 
-def _extract_task_id_from_branch(branch: str | None) -> int | None:
-    if not branch:
+def _extract_task_id(text: str | None) -> int | None:
+    """Generic extractor for VSM Task IDs (#123, task-123, feature/PROJ-123)."""
+    if not text:
         return None
     import re
     patterns = [
@@ -180,7 +188,7 @@ def _extract_task_id_from_branch(branch: str | None) -> int | None:
         r"#(\d+)",
     ]
     for pat in patterns:
-        m = re.search(pat, branch, re.IGNORECASE)
+        m = re.search(pat, text, re.IGNORECASE)
         if m:
             return int(m.group(1))
     return None

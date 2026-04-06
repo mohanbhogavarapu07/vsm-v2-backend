@@ -45,6 +45,14 @@ class TaskService:
         team = await self._rbac_repo.get_team(team_id)
         if not team:
             raise HTTPException(status_code=404, detail="Team not found")
+
+        # SAFETY NET: If no status provided, use the first status in the workflow
+        if current_status_id is None:
+            statuses = await self._task_repo.list_statuses(team_id)
+            if statuses:
+                current_status_id = int(statuses[0].id)
+                logger.info("Auto-assigned default status %s to new task: %s", current_status_id, title)
+
         return await self._task_repo.create_task(
             team_id=team_id,
             title=title,
@@ -212,6 +220,69 @@ class TaskService:
             task_id, action_taken, confidence_score,
         )
         return task
+
+    async def apply_agent_link(
+        self,
+        task_id: int,
+        event_log_ids: list[int],
+        confidence_score: float,
+        reason: str,
+        input_signals: dict,
+    ) -> dict:
+        """
+        AI agent-initiated task linking (Discovery Mode).
+        Links unlinked events/activities to a specific task.
+        """
+        from app.models.enums import ActivityType, UnlinkedActivityStatus
+        
+        await self.require_task(task_id)
+        
+        async with self._db.tx() as tx:
+            # 1. Record the AI decision for the link
+            await tx.agentdecision.create(
+                data={
+                    "taskId": task_id,
+                    "actionTaken": "SUGGEST_LINK",
+                    "reason": reason,
+                    "confidenceScore": confidence_score,
+                    "inputSignals": input_signals,
+                    "decisionSource": DecisionSource.AI_MODEL.value,
+                }
+            )
+            
+            # 2. Find and link activities
+            for el_id in event_log_ids:
+                event = await tx.eventlog.find_unique(where={"id": el_id})
+                if not event:
+                    continue
+                    
+                # Create the linked activity record
+                # Determine activity type from event payload
+                act_type = ActivityType.COMMIT
+                if "pull_request" in event.payload:
+                    act_type = ActivityType.PR
+                
+                await tx.taskactivity.create(
+                    data={
+                        "taskId": task_id,
+                        "activityType": act_type.value,
+                        "metadata": event.payload,
+                        "eventLogId": event.id,
+                        "referenceId": event.referenceId,
+                    }
+                )
+                
+                # Update any corresponding unlinked activity record
+                await tx.unlinkedactivity.update_many(
+                    where={"referenceId": event.referenceId},
+                    data={
+                        "status": UnlinkedActivityStatus.AUTO_LINKED.value,
+                        "suggestedTaskId": task_id,
+                        "confidenceScore": confidence_score,
+                    }
+                )
+        
+        return {"status": "linked", "task_id": task_id, "event_count": len(event_log_ids)}
 
     # ── Decisions ─────────────────────────────────────────────────────────────
 

@@ -86,17 +86,28 @@ async def _trigger_ai_inference(
                 })
                 if not task_id:
                     task_id = _extract_task_id_from_payload(event.payload)
+                
+                # If we don't have a team_id yet, try to get it from the repository
+                if not team_id and event.repositoryId:
+                    gh_repo = await db.githubrepository.find_unique(where={"id": event.repositoryId})
+                    if gh_repo and gh_repo.teamId:
+                        team_id = gh_repo.teamId
 
-        if not task_id:
-            logger.warning("No task_id found in window %s — skipping AI", window_id)
-            return {"status": "skipped", "reason": "no_task_id"}
+        if not team_id and not task_id:
+            logger.warning("No task_id or team_id found in window %s — skipping AI", window_id)
+            return {"status": "skipped", "reason": "no_context"}
 
-        task = await task_repo.get_task_by_id(task_id)
-        if not task:
-            logger.warning("Task %s not found — skipping AI", task_id)
-            return {"status": "skipped", "reason": "task_not_found"}
+        if task_id:
+            task = await task_repo.get_task_by_id(task_id)
+            if not task:
+                logger.warning("Task %s not found — proceeding without specific task context", task_id)
+                task_id = None # Fallback to discovery if task ID is invalid
+            else:
+                team_id = task.teamId
 
-        team_id = task.teamId
+        if not team_id:
+            logger.warning("Could not resolve team_id for window %s — skipping AI", window_id)
+            return {"status": "skipped", "reason": "no_team_id"}
 
         # ── Call vsm-ai-agent ──────────────────────────────────────────────────
         ai_payload = {
@@ -128,7 +139,9 @@ async def _trigger_ai_inference(
 def _extract_task_id_from_payload(payload: dict) -> int | None:
     if tid := payload.get("task_id"):
         return int(tid)
-    ref = payload.get("ref", "")
-    branch = payload.get("pull_request", {}).get("head", {}).get("ref", ref)
-    from app.workers.event_processor import _extract_task_id_from_branch
-    return _extract_task_id_from_branch(branch)
+    pr = payload.get("pull_request", {})
+    branch = pr.get("head", {}).get("ref") or payload.get("ref", "")
+    title = pr.get("title", "")
+    
+    from app.workers.event_processor import _extract_task_id
+    return _extract_task_id(branch) or _extract_task_id(title)

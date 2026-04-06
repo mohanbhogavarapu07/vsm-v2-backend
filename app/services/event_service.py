@@ -53,7 +53,7 @@ class EventService:
             event_type=event_type,
             source=EventSource.GITHUB,
             payload=payload,
-            event_timestamp=event_timestamp,
+            event_timestamp=ts,
             reference_id=reference_id,
             correlation_id=correlation_id,
             installation_id=installation_id,

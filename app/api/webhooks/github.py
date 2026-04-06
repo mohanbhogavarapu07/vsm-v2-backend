@@ -70,10 +70,10 @@ async def github_webhook(
             repository_id=repository_id,
         )
     except Exception as e:
-        logger.error("Failed to ingest GitHub event: %s", e)
+        logger.error("Failed to ingest GitHub event: %s", e, exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to ingest event: {str(e)}"
+            detail=f"Failed to ingest event: {type(e).__name__} - {str(e)}"
         )
 
     # ── Automated Repository Sync ──────────────────────────────────────────

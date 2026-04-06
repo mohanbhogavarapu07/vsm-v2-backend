@@ -31,6 +31,7 @@ from app.schemas.task_schemas import (
     UnlinkedActivityResponse,
     LinkActivityRequest,
     AgentTransitionRequest,
+    AgentLinkRequest,
 )
 from app.models.enums import UnlinkedActivityStatus
 from app.models.enums import MappingMethod
@@ -205,6 +206,32 @@ async def agent_transition(
         input_signals=payload.input_signals,
     )
     return TaskSchema.model_validate(task)
+
+
+@router.post(
+    "/agent/link",
+    status_code=status.HTTP_200_OK,
+    summary="AI-initiated task linking [requires UPDATE_TASK permission]",
+    description=(
+        "Used by the AI agent when discovery mode identifies a task for unlinked events. "
+        "Atomically creates TaskActivity records and updates UnlinkedActivity status."
+    ),
+)
+async def agent_link(
+    payload: AgentLinkRequest,
+    _: None = Depends(require_permission("UPDATE_TASK")),
+    team_id: int = Query(..., description="Team ID for permission scope"),
+    db: Prisma = Depends(get_db),
+) -> dict:
+    svc = TaskService(db)
+    result = await svc.apply_agent_link(
+        task_id=payload.task_id,
+        event_log_ids=payload.event_log_ids,
+        confidence_score=payload.confidence_score,
+        reason=payload.reason,
+        input_signals=payload.input_signals,
+    )
+    return result
 
 
 # ─────────────────────────────────────────────────────────────────────────────

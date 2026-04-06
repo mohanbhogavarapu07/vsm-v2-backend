@@ -8,7 +8,7 @@ ActivityTaskMappingLog, ChatMessage, NLPInsight, and NLPFeedback.
 import logging
 from typing import Any
 
-from prisma import Prisma
+from prisma import Prisma, Json
 from prisma.models import (
     TaskActivity,
     UnlinkedActivity,
@@ -47,7 +47,7 @@ class ActivityRepository:
     ) -> TaskActivity:
         data: dict[str, Any] = {
             "activityType": activity_type.value,
-            "metadata": metadata,
+            "metadata": Json(metadata),
         }
         if task_id:
             data["taskId"] = task_id
@@ -179,7 +179,7 @@ class ActivityRepository:
             "detectedIntent": detected_intent.value,
             "confidenceScore": confidence_score,
             "requiresConfirmation": requires_confirmation,
-            "contextSnapshot": context_snapshot,
+            "contextSnapshot": Json(context_snapshot),
         }
         if task_id:
             data["taskId"] = task_id

@@ -8,7 +8,7 @@ TransitionCondition, AgentDecision, and DecisionFeedback.
 import logging
 from typing import Any
 
-from prisma import Prisma
+from prisma import Prisma, Json
 from prisma.models import (
     Task,
     TaskStatus,
@@ -42,15 +42,15 @@ class TaskRepository:
             "teamId": team_id,
             "title": title,
         }
-        if description:
+        if description is not None:
             data["description"] = description
         if sprint_id is not None:
             data["sprintId"] = sprint_id
-        if current_status_id:
+        if current_status_id is not None:
             data["currentStatusId"] = current_status_id
-        if assignee_id:
+        if assignee_id is not None:
             data["assigneeId"] = assignee_id
-        if priority:
+        if priority is not None:
             data["priority"] = priority
 
         task = await self._db.task.create(data=data)
@@ -184,7 +184,7 @@ class TaskRepository:
                 "actionTaken": action_taken,
                 "reason": reason,
                 "confidenceScore": confidence_score,
-                "inputSignals": input_signals,
+                "inputSignals": Json(input_signals),
                 "decisionSource": decision_source.value,
             }
         )

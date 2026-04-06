@@ -124,6 +124,17 @@ class LinkActivityRequest(BaseModel):
 
 # ── Agent Internal Transition (no user RBAC — system process only) ────────────
 
+class AgentLinkRequest(BaseModel):
+    """
+    Used by the AI agent to link unlinked events to a discovered task.
+    """
+    task_id: int = Field(..., description="Task to link to")
+    event_log_ids: list[int] = Field(..., description="Events to link")
+    confidence_score: float
+    reason: str
+    input_signals: dict[str, Any] = Field(default_factory=dict)
+
+
 class AgentTransitionRequest(BaseModel):
     """
     Used by the AI agent to update task status.

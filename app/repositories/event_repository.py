@@ -152,7 +152,7 @@ class EventRepository:
             data={
                 "correlationId": correlation_id,
                 "startTime": now,
-                "aggregatedEvents": [event_id],
+                "aggregatedEvents": Json([event_id]),
                 "status": WindowStatus.OPEN.value,
             }
         )
@@ -164,7 +164,7 @@ class EventRepository:
         updated_events = current_events + [new_event_id]
         return await self._db.eventaggregationwindow.update(
             where={"id": window_id},
-            data={"aggregatedEvents": updated_events},
+            data={"aggregatedEvents": Json(updated_events)},
         )
 
     async def close_window(self, window_id: int) -> None:
