@@ -258,3 +258,48 @@ async def sync_github_repositories(
     except Exception as e:
         logger.exception(f"Manual synchronization failed: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/health/unlinked", status_code=status.HTTP_200_OK)
+async def check_unlinked_repositories(
+    _: None = Depends(require_permission("READ_TASK")),
+    db: Prisma = Depends(get_db)
+):
+    """
+    Health check endpoint: Lists repositories that are receiving events but not linked to any team.
+    
+    WARNING: Unlinked repositories will not trigger AI agent processing.
+    Events from these repositories are stored but not processed.
+    
+    Use /integrations/github/link to associate repositories with teams.
+    """
+    # Find all repositories without team linkage
+    unlinked_repos = await db.githubrepository.find_many(
+        where={"teamId": None},
+        include={"installation": True}
+    )
+    
+    # Check if any of these repositories have received events
+    repos_with_events = []
+    for repo in unlinked_repos:
+        event_count = await db.eventlog.count(
+            where={"repositoryId": repo.id}
+        )
+        if event_count > 0:
+            repos_with_events.append({
+                "repository_id": repo.id,
+                "repository_name": repo.fullName,
+                "installation_id": repo.installationId,
+                "installation_account": repo.installation.accountName if repo.installation else "Unknown",
+                "event_count": event_count,
+                "status": "receiving_events_but_unlinked",
+                "action_required": f"Link to team via POST /integrations/github/link with repositoryId={repo.id}"
+            })
+    
+    return {
+        "total_unlinked_repositories": len(unlinked_repos),
+        "repositories_receiving_events_unlinked": len(repos_with_events),
+        "status": "warning" if repos_with_events else "ok",
+        "warning": "Some repositories are receiving events but not processing them. Link them to teams." if repos_with_events else None,
+        "unlinked_repositories_with_events": repos_with_events
+    }

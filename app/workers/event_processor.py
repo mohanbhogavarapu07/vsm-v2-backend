@@ -69,7 +69,21 @@ async def _process_event(task_instance: Task, event_id: int, queue_id: int) -> d
                 gh_repo = await db.githubrepository.find_unique(where={"id": repo_id})
                 if gh_repo and gh_repo.teamId:
                     target_team_id = gh_repo.teamId
-                    logger.info("Matched event %s to team %s", event_id, target_team_id)
+                    logger.info("Matched event %s to team %s via repository %s", event_id, target_team_id, repo_id)
+                elif gh_repo:
+                    logger.warning(
+                        "Repository %s (%s) is not linked to any team. Event %s will be marked as unlinked. "
+                        "Use /integrations/github/link to associate this repository with a team.",
+                        repo_id, gh_repo.fullName if hasattr(gh_repo, 'fullName') else 'unknown', event_id
+                    )
+                else:
+                    logger.error(
+                        "Repository %s not found in database for event %s. "
+                        "Repository may have been deleted or sync is needed.",
+                        repo_id, event_id
+                    )
+            else:
+                logger.warning("Event %s has no repository_id. Cannot map to team.", event_id)
 
             if event.eventType in (EventType.PR_CREATED.value, EventType.PR_MERGED.value):
                 pr = payload.get("pull_request", {})

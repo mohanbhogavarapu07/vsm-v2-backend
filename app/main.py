@@ -14,9 +14,10 @@ from fastapi.middleware.gzip import GZipMiddleware
 
 from app.config import get_settings
 from app.database import connect_prisma, disconnect_prisma
-from app.routers.webhooks import router as webhooks_router
+# Removed deprecated webhooks_router - consolidated into github webhook API
 from app.api.webhooks.chat import router as chat_router
 from app.api.webhooks.ci import router as ci_router
+from app.api.webhooks.github import router as github_webhook_router
 from app.api.internal.tasks import router as tasks_router
 from app.api.internal.health import router as health_router
 from app.api.internal.rbac import router as rbac_router
@@ -88,7 +89,7 @@ def create_app() -> FastAPI:
 
     # ── Routers ────────────────────────────────────────────────────────────────
     app.include_router(health_router)
-    app.include_router(webhooks_router)
+    app.include_router(github_webhook_router)  # Primary GitHub webhook handler
     app.include_router(chat_router)
     app.include_router(ci_router)
     app.include_router(tasks_router)
