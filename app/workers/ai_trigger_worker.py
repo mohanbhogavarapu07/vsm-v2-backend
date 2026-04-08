@@ -121,14 +121,55 @@ async def _trigger_ai_inference(
 
         try:
             async with httpx.AsyncClient(timeout=settings.ai_agent_timeout) as client:
+                # Health check before sending payload
+                try:
+                    health_response = await client.get(
+                        f"{settings.ai_agent_url}/health",
+                        timeout=2.0
+                    )
+                    if health_response.status_code != 200:
+                        logger.warning(
+                            "AI agent health check failed with status %s for window %s. Proceeding with inference anyway.",
+                            health_response.status_code, window_id
+                        )
+                except Exception as health_exc:
+                    logger.warning(
+                        "AI agent health check failed for window %s: %s. Proceeding with inference anyway.",
+                        window_id, health_exc
+                    )
+                
+                # Send inference request
                 response = await client.post(
                     f"{settings.ai_agent_url}/agent/infer",
                     json=ai_payload,
                 )
                 response.raise_for_status()
                 ai_result = response.json()
+                logger.info("AI agent inference successful for window %s", window_id)
+        except httpx.ConnectError:
+            logger.error(
+                "AI agent connection refused at %s for window %s. "
+                "Ensure AI agent service is running. Events stored but not processed.",
+                settings.ai_agent_url, window_id
+            )
+            return {
+                "status": "ai_agent_unreachable",
+                "error": "Connection refused",
+                "ai_agent_url": settings.ai_agent_url,
+                "window_id": window_id
+            }
+        except httpx.TimeoutException as exc:
+            logger.error(
+                "AI agent timeout at %s for window %s (timeout: %ss). AI agent may be overloaded.",
+                settings.ai_agent_url, window_id, settings.ai_agent_timeout
+            )
+            backoff = compute_retry_backoff(task_instance.request.retries)
+            raise task_instance.retry(exc=exc, countdown=backoff)
         except httpx.HTTPError as exc:
-            logger.error("AI agent HTTP error: %s", exc)
+            logger.error(
+                "AI agent HTTP error: %s for window %s. Status: %s",
+                exc, window_id, getattr(exc.response, 'status_code', 'unknown')
+            )
             backoff = compute_retry_backoff(task_instance.request.retries)
             raise task_instance.retry(exc=exc, countdown=backoff)
 
