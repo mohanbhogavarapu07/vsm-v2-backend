@@ -5,6 +5,8 @@ RBAC-enforced task management endpoints.
 Every user-facing endpoint requires the caller to have the matching Permission
 for the team they are operating in (via X-User-ID header + team_id query param).
 
+OPTIMIZED: Added response caching for frequently accessed read endpoints.
+
 Flow:
   - User endpoints: X-User-ID + team_id → role → permissions → allow/deny
   - AI actions: same flow as any user (service account identity + RBAC)
@@ -20,6 +22,7 @@ from app.services.task_service import TaskService, UNSET
 from app.repositories.activity_repository import ActivityRepository
 from app.repositories.event_repository import EventRepository
 from app.utils.permissions import require_permission, require_any_permission
+from app.utils.cache import task_cache, cached_response
 from app.schemas.task_schemas import (
     TaskSchema,
     TaskCreateRequest,
@@ -83,9 +86,18 @@ async def list_tasks(
     _: None = Depends(require_permission("READ_TASK")),
     db: Prisma = Depends(get_db),
 ) -> list[TaskSchema]:
+    # Cache key includes team_id, limit, offset
+    cache_key = f"tasks_list_{team_id}_{limit}_{offset}"
+    cached = task_cache.get(cache_key)
+    if cached is not None:
+        logger.debug(f"Cache HIT: {cache_key}")
+        return cached
+    
     svc = TaskService(db)
     tasks = await svc.list_tasks(team_id, limit, offset)
-    return [TaskSchema.model_validate(t) for t in tasks]
+    result = [TaskSchema.model_validate(t) for t in tasks]
+    task_cache.set(cache_key, result)
+    return result
 
 
 @router.post(
@@ -155,9 +167,15 @@ async def list_events(
     _: None = Depends(require_permission("READ_TASK")),
     db: Prisma = Depends(get_db),
 ) -> list[dict]:
+    cache_key = f"events_list_{team_id}_{limit}"
+    cached = task_cache.get(cache_key)
+    if cached is not None:
+        logger.debug(f"Cache HIT: {cache_key}")
+        return cached
+    
     repo = EventRepository(db)
     items = await repo.list_recent_events(limit=limit)
-    return [
+    result = [
         {
             "id": e.id,
             "event_type": e.eventType,
@@ -171,6 +189,8 @@ async def list_events(
         }
         for e in items
     ]
+    task_cache.set(cache_key, result)
+    return result
 
 
 @router.get(

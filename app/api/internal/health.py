@@ -1,5 +1,7 @@
 """
 VSM Backend – Health Check (Prisma)
+
+OPTIMIZED: Added cache performance monitoring endpoint.
 """
 
 import time
@@ -10,6 +12,7 @@ from prisma import Prisma
 
 from app.database import get_db
 from app.config import get_settings
+from app.utils.cache import task_cache, team_cache, github_cache, sprint_cache, permission_cache
 
 router = APIRouter(prefix="/health", tags=["health"])
 settings = get_settings()
@@ -42,4 +45,61 @@ async def readiness(db: Prisma = Depends(get_db)) -> dict:
         "uptime_seconds": round(time.time() - _start_time, 2),
         "database": db_status,
         "timestamp": datetime.now(timezone.utc).isoformat(),
+    }
+
+
+@router.get("/cache-stats", summary="Cache performance statistics")
+async def cache_stats() -> dict:
+    """
+    Returns cache hit/miss statistics for all cache instances.
+    Useful for monitoring cache effectiveness and optimization impact.
+    """
+    return {
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "uptime_seconds": round(time.time() - _start_time, 2),
+        "caches": {
+            "tasks": {
+                "ttl_seconds": task_cache.ttl,
+                **task_cache.get_stats()
+            },
+            "teams": {
+                "ttl_seconds": team_cache.ttl,
+                **team_cache.get_stats()
+            },
+            "github": {
+                "ttl_seconds": github_cache.ttl,
+                **github_cache.get_stats()
+            },
+            "sprints": {
+                "ttl_seconds": sprint_cache.ttl,
+                **sprint_cache.get_stats()
+            },
+            "permissions": {
+                "ttl_seconds": permission_cache.ttl,
+                **permission_cache.get_stats()
+            }
+        },
+        "summary": {
+            "total_hits": sum([
+                task_cache._hits,
+                team_cache._hits,
+                github_cache._hits,
+                sprint_cache._hits,
+                permission_cache._hits
+            ]),
+            "total_misses": sum([
+                task_cache._misses,
+                team_cache._misses,
+                github_cache._misses,
+                sprint_cache._misses,
+                permission_cache._misses
+            ]),
+            "total_entries": sum([
+                len(task_cache._cache),
+                len(team_cache._cache),
+                len(github_cache._cache),
+                len(sprint_cache._cache),
+                len(permission_cache._cache)
+            ])
+        }
     }

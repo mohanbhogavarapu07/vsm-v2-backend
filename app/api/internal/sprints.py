@@ -1,7 +1,11 @@
 """
 VSM Backend – Sprints API
 
-Full Jira-style sprint lifecycle:
+Full Jira-style sprint lifecycle.
+
+OPTIMIZED: Added response caching for frequently accessed read endpoints.
+
+Endpoints:
   POST   /teams/{team_id}/sprints/                       → create sprint
   GET    /teams/{team_id}/sprints/                       → list sprints (with task counts)
   PATCH  /teams/{team_id}/sprints/{sprint_id}            → update name/goal/dates
@@ -21,6 +25,7 @@ from prisma import Prisma
 from app.database import get_db
 from app.services.sprint_service import SprintService
 from app.utils.permissions import require_permission
+from app.utils.cache import sprint_cache
 from app.schemas.sprint_schemas import (
     SprintCreateRequest,
     SprintUpdateRequest,
@@ -73,6 +78,12 @@ async def list_sprints(
     _: None = Depends(require_permission("READ_TASK")),
     db: Prisma = Depends(get_db),
 ) -> list[SprintWithStatsSchema]:
+    cache_key = f"sprints_list_{team_id}"
+    cached = sprint_cache.get(cache_key)
+    if cached is not None:
+        logger.debug(f"Cache HIT: {cache_key}")
+        return cached
+    
     svc = SprintService(db)
     sprints = await svc.list_sprints(team_id)
     
@@ -84,6 +95,8 @@ async def list_sprints(
         schema = SprintWithStatsSchema.model_validate(s)
         schema.task_counts = stats_map.get(s.id, schema.task_counts)
         result.append(schema)
+    
+    sprint_cache.set(cache_key, result)
     return result
 
 
@@ -208,9 +221,17 @@ async def list_sprint_tasks(
     _: None = Depends(require_permission("READ_TASK")),
     db: Prisma = Depends(get_db),
 ) -> list[TaskSchema]:
+    cache_key = f"sprint_tasks_{team_id}_{sprint_id}"
+    cached = sprint_cache.get(cache_key)
+    if cached is not None:
+        logger.debug(f"Cache HIT: {cache_key}")
+        return cached
+    
     svc = SprintService(db)
     tasks = await svc.get_sprint_tasks(sprint_id, team_id)
-    return [TaskSchema.model_validate(t) for t in tasks]
+    result = [TaskSchema.model_validate(t) for t in tasks]
+    sprint_cache.set(cache_key, result)
+    return result
 
 
 @router.post(

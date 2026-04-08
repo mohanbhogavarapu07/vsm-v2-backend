@@ -9,6 +9,8 @@ Complete Jira-like REST API for:
   5. Custom Workflow Board (TaskStatus columns + Transitions)
   6. Permission self-check (/me)
 
+OPTIMIZED: Added response caching for frequently accessed read endpoints.
+
 Strict Order Flow enforced in service layer:
   Project → Team → Roles → Invite Users
 """
@@ -21,12 +23,12 @@ from prisma import Prisma
 from app.database import get_db
 from app.services.rbac_service import RBACService
 from app.utils.permissions import require_permission, require_any_permission, get_current_user_permissions
+from app.utils.cache import team_cache
 from app.schemas.rbac_schemas import (
     ProjectCreateRequest, ProjectResponse,
     TeamCreateRequest, TeamUpdateRequest, TeamResponse,
     RoleCreateRequest, RoleUpdateRequest, RoleResponse,
     UserInviteRequest, InvitationAcceptRequest, MemberRoleUpdateRequest, TeamMemberDetailResponse,
-    InvitationDetailsResponse, InvitationAcceptResponse,
     InvitationDetailsResponse, InvitationAcceptResponse,
 )
 
@@ -62,8 +64,16 @@ async def list_projects(
     x_user_id: Optional[int] = Header(None, alias="X-User-ID"),
     db: Prisma = Depends(get_db),
 ):
+    cache_key = f"projects_list_{x_user_id if x_user_id else 'all'}"
+    cached = team_cache.get(cache_key)
+    if cached is not None:
+        logger.debug(f"Cache HIT: {cache_key}")
+        return cached
+    
     svc = RBACService(db)
-    return await svc.list_projects(user_id=x_user_id)
+    result = await svc.list_projects(user_id=x_user_id)
+    team_cache.set(cache_key, result)
+    return result
 
 
 @router.post(
@@ -146,8 +156,16 @@ async def list_teams(
     x_user_id: int = Header(..., alias="X-User-ID"),
     db: Prisma = Depends(get_db),
 ):
+    cache_key = f"teams_list_{project_id}_{x_user_id}"
+    cached = team_cache.get(cache_key)
+    if cached is not None:
+        logger.debug(f"Cache HIT: {cache_key}")
+        return cached
+    
     svc = RBACService(db)
-    return await svc.list_teams(project_id, x_user_id)
+    result = await svc.list_teams(project_id, x_user_id)
+    team_cache.set(cache_key, result)
+    return result
 
 
 @router.get(
@@ -387,6 +405,12 @@ async def list_members(
     team_id: int = Path(...),
     db: Prisma = Depends(get_db),
 ):
+    cache_key = f"team_members_{team_id}"
+    cached = team_cache.get(cache_key)
+    if cached is not None:
+        logger.debug(f"Cache HIT: {cache_key}")
+        return cached
+    
     svc = RBACService(db)
     members = await svc.get_team_members(team_id)
     role_ids = sorted({m.roleId for m in members if m.roleId})
@@ -394,7 +418,7 @@ async def list_members(
     for rid in role_ids:
         role_permissions[int(rid)] = await svc.repo.get_role_permission_codes(rid)
 
-    return [
+    result = [
         {
             "id": m.id,
             "team_id": m.teamId,
@@ -408,6 +432,8 @@ async def list_members(
         }
         for m in members
     ]
+    team_cache.set(cache_key, result)
+    return result
 
 
 @router.patch(

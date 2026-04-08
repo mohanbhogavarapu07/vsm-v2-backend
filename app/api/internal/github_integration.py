@@ -1,6 +1,8 @@
 """
 VSM Backend – GitHub App Integration Endpoints
 Handles installation callbacks and repository linking.
+
+OPTIMIZED: Added response caching for repository listings.
 """
 
 import logging
@@ -15,6 +17,7 @@ from app.database import get_db
 from app.services.github_service import GitHubService
 from app.schemas.github_schemas import GitHubInstallationResponse, GitHubRepoResponse, GitHubRepoLinkRequest
 from app.utils.permissions import require_permission
+from app.utils.cache import github_cache
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/integrations/github", tags=["integrations"])
@@ -45,7 +48,7 @@ async def get_install_url(
     except Exception as e:
         logger.error(f"Failed to fetch App metadata: {e}")
         # Default fallback (without state, sync won't link to team automatically)
-        return {"url": f"https://github.com/apps/vsm-agent/installations/new"}
+        return {"url": "https://github.com/apps/vsm-agent/installations/new"}
 
 @router.get("/callback")
 async def github_callback(
@@ -157,9 +160,16 @@ async def list_available_repositories(
     db: Prisma = Depends(get_db)
 ):
     """Lists all repositories that have been installed but not yet linked (or all synced repos)."""
+    cache_key = "gh_all_repos"
+    cached = github_cache.get(cache_key)
+    if cached is not None:
+        logger.debug(f"Cache HIT: {cache_key}")
+        return cached
+    
     repos = await db.githubrepository.find_many(
         include={"installation": True}
     )
+    github_cache.set(cache_key, repos)
     return repos
 
 @router.post("/link", response_model=GitHubRepoResponse)
@@ -185,6 +195,11 @@ async def link_repository_to_team(
         where={"id": payload.repositoryId},
         data={"teamId": team_id}
     )
+    
+    # Invalidate cache after linking
+    github_cache.invalidate("gh_all_repos")
+    github_cache.invalidate(f"gh_team_repos_{team_id}")
+    
     return repo
 
 @router.get("/team/{team_id}", response_model=List[GitHubRepoResponse])
@@ -194,9 +209,16 @@ async def get_team_repositories(
     db: Prisma = Depends(get_db)
 ):
     """Returns repositories linked to a specific team."""
+    cache_key = f"gh_team_repos_{team_id}"
+    cached = github_cache.get(cache_key)
+    if cached is not None:
+        logger.debug(f"Cache HIT: {cache_key}")
+        return cached
+    
     repos = await db.githubrepository.find_many(
         where={"teamId": team_id}
     )
+    github_cache.set(cache_key, repos)
     return repos
 
 @router.post("/sync", status_code=status.HTTP_200_OK)
