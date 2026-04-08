@@ -9,7 +9,7 @@ import logging
 import asyncio
 from datetime import datetime, timezone
 from typing import List
-from fastapi import APIRouter, Depends, HTTPException, Query, status, Request
+from fastapi import APIRouter, Depends, HTTPException, Query, status, Request, BackgroundTasks
 from fastapi.responses import RedirectResponse
 from prisma import Prisma
 
@@ -53,6 +53,7 @@ async def get_install_url(
 @router.get("/callback")
 async def github_callback(
     request: Request,
+    background_tasks: BackgroundTasks,
     installation_id: int = Query(...),
     setup_action: str = Query(...),
     state: str | None = Query(None), # This will be our team_id
@@ -81,20 +82,20 @@ async def github_callback(
             logger.error(f"Failed to decode state parameter: {e}")
 
     try:
-        logger.info(f"Processing GitHub callback for installation {installation_id} with parsed team_id: {team_id}")
+        logger.info(f"Queueing GitHub sync for installation {installation_id} with team_id: {team_id}")
         
-        # Use the centralized sync service
-        await svc.sync_repositories(db, installation_id, team_id)
-        
-        logger.info(f"Successfully processed repository sync for installation {installation_id}")
+        # ── Asynchronous Sync ──────────────────────────────────────────────────
+        # We trigger the sync in the background so the user doesn't wait.
+        # This is especially important for installations with many repositories.
+        background_tasks.add_task(svc.sync_repositories, db, installation_id, team_id)
         
     except Exception as e:
-        logger.exception(f"GitHub callback failed for installation {installation_id}: {e}")
+        logger.exception(f"Failed to queue GitHub sync for installation {installation_id}: {e}")
         from app.config import get_settings
         settings = get_settings()
         
         if from_frontend:
-            raise HTTPException(status_code=500, detail=str(e))
+            raise HTTPException(status_code=500, detail="Failed to initiate synchronization")
             
         # Dynamic error redirect
         origin = request.headers.get("referer") or request.headers.get("origin")
@@ -245,8 +246,15 @@ async def sync_github_repositories(
                 total_synced += len(synced)
             except Exception as e:
                 logger.error(f"Manual sync failed for installation {inst.id}: {e}")
+        
+        # Final global cache clear to ensure frontend sees all changes
+        github_cache.invalidate("gh_all_repos")
+        github_cache.invalidate(f"gh_team_repos_{team_id}")
                 
-        return {"message": f"Successfully synced {total_synced} repositories.", "synced": total_synced}
+        return {
+            "message": f"Universal sync complete. Processed {total_synced} repositories and removed orphaned data.",
+            "synced": total_synced
+        }
     except Exception as e:
         logger.exception(f"Manual synchronization failed: {e}")
         raise HTTPException(status_code=500, detail=str(e))

@@ -184,8 +184,11 @@ def _extract_task_id(text: str | None) -> int | None:
     import re
     patterns = [
         r"(?:feature|fix|hotfix|bugfix|chore)/(?:[A-Z]+-)?(\d+)",
-        r"task[/-](\d+)",
-        r"#(\d+)",
+        r"[A-Z]{2,}-(\d+)",       # Matches VSM-123, PROJ-123
+        r"\[[A-Z]{2,}-(\d+)\]",   # Matches [VSM-123]
+        r"task[/-](\d+)",         # Matches task/123, task-123
+        r"(?i)task[:\s]+#?(\d+)", # Matches Task: 123, task 123
+        r"#(\d+)",                # Matches #123
     ]
     for pat in patterns:
         m = re.search(pat, text, re.IGNORECASE)

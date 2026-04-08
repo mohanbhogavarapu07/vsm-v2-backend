@@ -109,14 +109,25 @@ async def _trigger_ai_inference(
             logger.warning("Could not resolve team_id for window %s — skipping AI", window_id)
             return {"status": "skipped", "reason": "no_team_id"}
 
+        # Resolve project_id from team_id
+        team = await db.team.find_unique(where={"id": team_id})
+        if not team:
+            logger.error("Team %s not found during project resolution", team_id)
+            return {"status": "error", "reason": "team_not_found"}
+        project_id = team.projectId
+
         # ── Call vsm-ai-agent ──────────────────────────────────────────────────
+        # Aligned with vsm-ai-agent InferRequest schema
         ai_payload = {
-            "task_id": task_id,
+            "project_id": project_id,
             "team_id": team_id,
+            "task_id": task_id,
             "correlation_id": correlation_id,
             "aggregated_events": events_data,
             "window_start": window_start,
             "window_end": window_end,
+            "github_event_type": events_data[0]["event_type"] if events_data else "UNKNOWN",
+            "actor_github_login": events_data[0]["payload"].get("sender", {}).get("login", "unknown") if events_data else "unknown",
         }
 
         try:

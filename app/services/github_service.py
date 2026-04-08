@@ -49,7 +49,7 @@ class GitHubService:
             raise ValueError("GITHUB_APP_ID and GITHUB_PRIVATE_KEY must be set")
         
         # Ensure private key is correctly formatted if it's a string from env
-        key = self.private_key.replace("\\n", "\n")
+        key = self.private_key.strip().replace("\\n", "\n")
         
         now = int(time.time())
         payload = {
@@ -233,7 +233,8 @@ class GitHubService:
                         "id": r["id"],
                         "name": r["name"],
                         "fullName": r["full_name"],
-                        "installationId": installation_id
+                        "installationId": installation_id,
+                        "teamId": team_id 
                     }
                     
                     upserted = await db.githubrepository.upsert(
@@ -244,7 +245,7 @@ class GitHubService:
                                 "name": r["name"],
                                 "fullName": r["full_name"],
                                 "installationId": installation_id,
-                                "teamId": existing.teamId if existing else None # Preserve existing linkage
+                                "teamId": existing.teamId if existing and existing.teamId else team_id 
                             }
                         }
                     )
@@ -258,8 +259,25 @@ class GitHubService:
                     else:
                         await asyncio.sleep(1 * retry_count) # Exponential backoff
         
+        # 4. Prune orphaned repositories (those in DB but no longer in GitHub response)
+        current_repo_ids = [r["id"] for r in repos]
+        try:
+            # Result is a dictionary with a 'count' key in Prisma Python
+            deleted_result = await db.githubrepository.delete_many(
+                where={
+                    "installationId": installation_id,
+                    "id": {"not_in": current_repo_ids}
+                }
+            )
+            deleted_count = deleted_result if isinstance(deleted_result, int) else deleted_result.get("count", 0)
+            if deleted_count > 0:
+                logger.info(f"Pruned {deleted_count} orphaned repositories for installation {installation_id}")
+        except Exception as prune_err:
+            logger.error(f"Failed to prune orphaned repositories for installation {installation_id}: {prune_err}")
+        
         # Invalidate cache after sync to force fresh data on next request
         github_cache.invalidate(f"gh_install_repos_{installation_id}")
-        logger.info(f"Invalidated GitHub cache for installation {installation_id}")
+        github_cache.invalidate("gh_all_repos") # Global invalidation
+        logger.info(f"Invalidated GitHub caches for installation {installation_id}")
         
         return synced_repos
