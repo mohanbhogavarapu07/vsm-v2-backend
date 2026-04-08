@@ -41,7 +41,7 @@ router = APIRouter(prefix="/teams/{team_id}", tags=["sprints"], redirect_slashes
 # ─────────────────────────────────────────────────────────────────────────────
 
 @router.post(
-    "/sprints/",
+    "/sprints",
     response_model=SprintSchema,
     status_code=status.HTTP_201_CREATED,
     summary="Create a new sprint [requires CREATE_TASK permission]",
@@ -64,7 +64,7 @@ async def create_sprint(
 
 
 @router.get(
-    "/sprints/",
+    "/sprints",
     response_model=list[SprintWithStatsSchema],
     summary="List sprints for a team with task count stats [requires READ_TASK permission]",
 )

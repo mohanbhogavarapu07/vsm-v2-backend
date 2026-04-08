@@ -106,6 +106,7 @@ class InvitationAcceptResponse(BaseModel):
 
 class TaskStatusCategory(str, Enum):
     BACKLOG    = "BACKLOG"
+    TODO       = "TODO"
     ACTIVE     = "ACTIVE"
     REVIEW     = "REVIEW"
     VALIDATION = "VALIDATION"

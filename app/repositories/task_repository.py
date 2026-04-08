@@ -1,8 +1,8 @@
 """
 VSM Backend – Task Repository (Prisma)
 
-All DB interactions for Task, TaskStatus, WorkflowTransition,
-TransitionCondition, AgentDecision, and DecisionFeedback.
+All DB interactions for Task, WorkflowStage, WorkflowTransition,
+AgentDecision, and DecisionFeedback.
 """
 
 import logging
@@ -11,7 +11,7 @@ from typing import Any
 from prisma import Prisma, Json
 from prisma.models import (
     Task,
-    TaskStatus,
+    WorkflowStage,
     WorkflowTransition,
     AgentDecision,
     DecisionFeedback,
@@ -34,7 +34,7 @@ class TaskRepository:
         title: str,
         description: str | None = None,
         sprint_id: int | None = None,
-        current_status_id: int | None = None,
+        current_stage_id: int | None = None,
         assignee_id: int | None = None,
         priority: str | None = None,
     ) -> Task:
@@ -46,8 +46,8 @@ class TaskRepository:
             data["description"] = description
         if sprint_id is not None:
             data["sprintId"] = sprint_id
-        if current_status_id is not None:
-            data["currentStatusId"] = current_status_id
+        if current_stage_id is not None:
+            data["currentStageId"] = current_stage_id
         if assignee_id is not None:
             data["assigneeId"] = assignee_id
         if priority is not None:
@@ -62,7 +62,7 @@ class TaskRepository:
     ) -> Task | None:
         return await self._db.task.find_unique(
             where={"id": task_id},
-            include={"currentStatus": load_status} if load_status else None,
+            include={"currentStage": load_status} if load_status else None,
         )
 
     async def list_tasks(
@@ -70,7 +70,7 @@ class TaskRepository:
     ) -> list[Task]:
         return await self._db.task.find_many(
             where={"teamId": team_id},
-            include={"currentStatus": True},
+            include={"currentStage": True},
             order={"createdAt": "desc"},
             take=limit,
             skip=offset,
@@ -83,34 +83,34 @@ class TaskRepository:
         )
 
     async def update_task_status(
-        self, task_id: int, new_status_id: int
+        self, task_id: int, new_stage_id: int
     ) -> Task | None:
         return await self._db.task.update(
             where={"id": task_id},
-            data={"currentStatusId": new_status_id},
+            data={"currentStageId": new_stage_id},
         )
 
-    # ── TaskStatus ─────────────────────────────────────────────────────────────
+    # ── WorkflowStage ─────────────────────────────────────────────────────────────
 
-    async def get_status_by_id(self, status_id: int) -> TaskStatus | None:
-        return await self._db.taskstatus.find_unique(
+    async def get_status_by_id(self, status_id: int) -> WorkflowStage | None:
+        return await self._db.workflowstage.find_unique(
             where={"id": status_id}
         )
 
     async def get_status_by_category_project(
         self, project_id: int, category: TaskStatusCategory
-    ) -> TaskStatus | None:
-        return await self._db.taskstatus.find_first(
+    ) -> WorkflowStage | None:
+        return await self._db.workflowstage.find_first(
             where={
                 "projectId": project_id,
-                "category": category.value,
+                "systemCategory": category.value,
             }
         )
 
-    async def list_statuses_by_project(self, project_id: int) -> list[TaskStatus]:
-        return await self._db.taskstatus.find_many(
+    async def list_statuses_by_project(self, project_id: int) -> list[WorkflowStage]:
+        return await self._db.workflowstage.find_many(
             where={"projectId": project_id},
-            order={"stageOrder": "asc"},
+            order={"positionOrder": "asc"},
         )
 
     async def create_status(
@@ -120,14 +120,14 @@ class TaskRepository:
         category: TaskStatusCategory,
         stage_order: int = 0,
         is_terminal: bool = False,
-    ) -> TaskStatus:
-        return await self._db.taskstatus.create(
+    ) -> WorkflowStage:
+        return await self._db.workflowstage.create(
             data={
                 "projectId": project_id,
                 "name": name,
-                "category": category.value,
-                "stageOrder": stage_order,
-                "isTerminal": is_terminal,
+                "systemCategory": category.value,
+                "positionOrder": stage_order,
+                "isBlocking": is_terminal,
             }
         )
 
@@ -140,31 +140,12 @@ class TaskRepository:
         return await self._db.workflowtransition.find_many(
             where={
                 "projectId": project_id,
-                "fromStatusId": from_status_id,
+                "fromStageId": from_status_id,
             },
             include={
-                "conditions": True,
-                "toStatus": True,
+                "toStage": True,
             },
-            order={"priority": "desc"},
-        )
-
-    async def get_transitions_by_category_project(
-        self,
-        project_id: int,
-        from_category: TaskStatusCategory,
-    ) -> list[WorkflowTransition]:
-        """AI uses category-based lookups for cross-org reasoning."""
-        return await self._db.workflowtransition.find_many(
-            where={
-                "projectId": project_id,
-                "fromCategory": from_category.value,
-            },
-            include={
-                "conditions": True,
-                "toStatus": True,
-            },
-            order={"priority": "desc"},
+            order={"priorityRank": "desc"},
         )
 
     # ── AgentDecision ──────────────────────────────────────────────────────────

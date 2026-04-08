@@ -22,15 +22,10 @@ class RBACRepository:
         if user_id:
             return await self.db.project.find_many(
                 where={
-                    "teams": {
-                        "some": {
-                            "members": {
-                                "some": {
-                                    "userId": user_id
-                                }
-                            }
-                        }
-                    }
+                    "OR": [
+                        {"projectMembers": {"some": {"userId": user_id}}},
+                        {"teams": {"some": {"members": {"some": {"userId": user_id}}}}}
+                    ]
                 },
                 order={"createdAt": "desc"}
             )
@@ -168,6 +163,9 @@ class RBACRepository:
                 await tx.rolepermission.create_many(
                     data=[{"roleId": role_id, "permissionId": pid} for pid in permission_ids]
                 )
+        # ── INVADIDATE CACHE ──
+        permission_cache.clear()
+        all_permissions_cache.clear()
 
     async def get_role_permission_codes(self, role_id: int) -> list[str]:
         rows = await self.db.rolepermission.find_many(
@@ -199,9 +197,12 @@ class RBACRepository:
     # ── Team Members ──────────────────────────────────────────────────────────
 
     async def create_team_member(self, team_id: int, user_id: int, role_id: int):
-        return await self.db.teammember.create(
+        member = await self.db.teammember.create(
             data={"teamId": team_id, "userId": user_id, "roleId": role_id}
         )
+        # ── INVALIDATE CACHE ──
+        permission_cache.invalidate(f"rbac_{user_id}_{team_id}")
+        return member
 
     async def get_team_members(self, team_id: int):
         return await self.db.teammember.find_many(
@@ -216,14 +217,42 @@ class RBACRepository:
         )
 
     async def update_member_role(self, member_id: int, role_id: int):
-        return await self.db.teammember.update(
+        updated = await self.db.teammember.update(
             where={"id": member_id},
             data={"roleId": role_id},
             include={"role": True, "user": True},
         )
+        # ── INVALIDATE CACHE ──
+        permission_cache.invalidate(f"rbac_{updated.userId}_{updated.teamId}")
+        return updated
 
     async def remove_team_member(self, member_id: int):
         return await self.db.teammember.delete(where={"id": member_id})
+
+    # ── Project Members ───────────────────────────────────────────────────────
+
+    async def add_project_member(self, project_id: int, user_id: int, role_id: int):
+        return await self.db.projectmember.create(
+            data={"projectId": project_id, "userId": user_id, "roleId": role_id}
+        )
+
+    async def get_project_members(self, project_id: int):
+        return await self.db.projectmember.find_many(
+            where={"projectId": project_id},
+            include={"user": True, "role": True},
+        )
+
+    async def get_project_member_by_user(self, project_id: int, user_id: int):
+        return await self.db.projectmember.find_first(
+            where={"projectId": project_id, "userId": user_id},
+            include={"role": True},
+        )
+
+    async def update_project_member_role(self, project_id: int, user_id: int, role_id: int):
+        return await self.db.projectmember.update(
+            where={"projectId_userId": {"projectId": project_id, "userId": user_id}},
+            data={"roleId": role_id}
+        )
 
     # ── Invitations ───────────────────────────────────────────────────────────
 
@@ -273,24 +302,24 @@ class RBACRepository:
         stage_order: int,
         is_terminal: bool = False,
     ):
-        return await self.db.taskstatus.create(
+        return await self.db.workflowstage.create(
             data={
                 "projectId": project_id,
                 "name": name,
-                "category": category,
-                "stageOrder": stage_order,
-                "isTerminal": is_terminal,
+                "systemCategory": category,
+                "positionOrder": stage_order,
+                "isBlocking": is_terminal,
             }
         )
 
     async def list_task_statuses(self, project_id: int):
-        return await self.db.taskstatus.find_many(
+        return await self.db.workflowstage.find_many(
             where={"projectId": project_id},
-            order={"stageOrder": "asc"},
+            order={"positionOrder": "asc"},
         )
 
     async def get_task_status_by_id(self, status_id: int):
-        return await self.db.taskstatus.find_unique(where={"id": status_id})
+        return await self.db.workflowstage.find_unique(where={"id": status_id})
 
     async def update_task_status(
         self, status_id: int, name: str | None, stage_order: int | None, is_terminal: bool | None
@@ -299,13 +328,13 @@ class RBACRepository:
         if name is not None:
             data["name"] = name
         if stage_order is not None:
-            data["stageOrder"] = stage_order
+            data["positionOrder"] = stage_order
         if is_terminal is not None:
-            data["isTerminal"] = is_terminal
-        return await self.db.taskstatus.update(where={"id": status_id}, data=data)
+            data["isBlocking"] = is_terminal
+        return await self.db.workflowstage.update(where={"id": status_id}, data=data)
 
     async def delete_task_status(self, status_id: int):
-        return await self.db.taskstatus.delete(where={"id": status_id})
+        return await self.db.workflowstage.delete(where={"id": status_id})
 
     # ── Workflow: Transitions ─────────────────────────────────────────────────
 
@@ -321,19 +350,19 @@ class RBACRepository:
         return await self.db.workflowtransition.create(
             data={
                 "projectId": project_id,
-                "fromStatusId": from_status_id,
-                "toStatusId": to_status_id,
-                "fromCategory": from_category,
-                "toCategory": to_category,
+                "fromStageId": from_status_id,
+                "toStageId": to_status_id,
                 "requiresManualApproval": requires_manual_approval,
+                "directionType": "FORWARD",
+                "triggerType": "MANUAL",
             }
         )
 
     async def list_workflow_transitions(self, project_id: int):
         return await self.db.workflowtransition.find_many(
             where={"projectId": project_id},
-            include={"fromStatus": True, "toStatus": True},
-            order={"priority": "desc"},
+            include={"fromStage": True, "toStage": True},
+            order={"priorityRank": "desc"},
         )
 
     async def delete_workflow_transition(self, transition_id: int):
@@ -355,42 +384,18 @@ class RBACRepository:
         if not team:
             return []
 
-        # 2. Fetch ALL memberships for this user in this project
-        memberships = await self.db.teammember.find_many(
-            where={
-                "userId": user_id,
-                "team": {"projectId": team.projectId},
-            },
-            include={
-                "role": {
-                    "include": {
-                        "rolePermissions": {"include": {"permission": True}}
-                    }
-                }
-            },
-        )
+        # 2. Check for Project-Level Membership (The New Layer)
+        project_membership = await self.get_project_member_by_user(team.projectId, user_id)
+        project_perms = []
+        is_project_high = False
+        
+        if project_membership and project_membership.role:
+            project_perms = await self.get_role_permission_codes(project_membership.roleId)
+            if "MANAGE_TEAM" in project_perms:
+                is_project_high = True
 
-        if not memberships:
-            permission_cache.set(cache_key, [])
-            return []
-
-        # 3. Check for high-level status
-        is_high = False
-        target_team_permissions = []
-
-        for m in memberships:
-            perms = [
-                rp.permission.code
-                for rp in m.role.rolePermissions
-                if getattr(rp, "permission", None)
-            ]
-            if "MANAGE_TEAM" in perms:
-                is_high = True
-            if m.teamId == team_id:
-                target_team_permissions = perms
-
-        # 4. If high-level, grant all system permissions
-        if is_high:
+        # 3. Check for High-Level Project Access
+        if is_project_high:
             all_perms = all_permissions_cache.get("system_all")
             if all_perms is None:
                 rows = await self.db.permission.find_many()
@@ -399,5 +404,32 @@ class RBACRepository:
             permission_cache.set(cache_key, all_perms)
             return all_perms
 
-        permission_cache.set(cache_key, target_team_permissions)
-        return target_team_permissions
+        # 4. Fetch Team-Specific Membership
+        team_membership = await self.get_member_by_user_team(user_id, team_id)
+        team_perms = []
+        if team_membership:
+            team_perms = await self.get_role_permission_codes(team_membership.roleId)
+
+        # 5. Combine and Cache
+        # Project permissions act as a baseline; team permissions are squad-specific
+        # In case of overlaps, we take the union
+        final_perms = list(set(project_perms + team_perms))
+        permission_cache.set(cache_key, final_perms)
+        return final_perms
+
+    async def get_project_permissions(self, user_id: int, project_id: int) -> list[str]:
+        """
+        Return permissions based ONLY on ProjectMember role.
+        """
+        membership = await self.get_project_member_by_user(project_id, user_id)
+        if not membership or not membership.role:
+            return []
+        
+        perms = await self.get_role_permission_codes(membership.roleId)
+        
+        # If they have MANAGE_TEAM at project level, they are effectively superusers for that project
+        if "MANAGE_TEAM" in perms:
+            rows = await self.db.permission.find_many()
+            return [p.code for p in rows]
+            
+        return perms

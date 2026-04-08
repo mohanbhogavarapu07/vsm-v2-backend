@@ -32,7 +32,7 @@ async def liveness() -> dict:
 async def readiness(db: Prisma = Depends(get_db)) -> dict:
     try:
         # Use Prisma to verify DB connectivity
-        await db.taskstatus.count()
+        await db.workflowstage.count()
         db_status = "ok"
     except Exception as e:
         db_status = f"error: {e}"

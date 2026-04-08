@@ -20,6 +20,7 @@ datasource db {
 
 enum TaskStatusCategory {
   BACKLOG
+  TODO
   ACTIVE
   REVIEW
   VALIDATION
@@ -38,6 +39,30 @@ enum SprintStatus {
   PLANNED
   ACTIVE
   COMPLETED
+}
+
+enum WorkflowReadiness {
+  DRAFT
+  INCOMPLETE
+  ACTIVE
+}
+
+enum ScopeType {
+  PROJECT
+  TEAM
+}
+
+enum DirectionType {
+  FORWARD
+  BACKWARD
+  PARALLEL
+}
+
+enum TriggerType {
+  GITHUB_EVENT
+  MANUAL
+  TIMER
+  CONDITION_MET
 }
 
 enum ConditionType {
@@ -131,6 +156,14 @@ enum DecisionSource {
   AI_MODEL
 }
 
+enum AgentDecisionStatus {
+  APPLIED
+  BLOCKED
+  NO_TRANSITION
+  FUZZY_LINK
+  PENDING_CONFIRMATION
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // CORE ENTITIES (RBAC)
 // ─────────────────────────────────────────────────────────────────────────────
@@ -148,6 +181,7 @@ model User {
   updatedAt      DateTime @updatedAt
 
   memberships        TeamMember[]
+  projectMembers     ProjectMember[]
   invitationsSent    TeamInvitation[]   @relation("InvitationsSent")
   chatMessages       ChatMessage[]
   nlpFeedbacks       NLPFeedback[]
@@ -170,16 +204,19 @@ model Permission {
 }
 
 model Project {
-  id            BigInt   @id @default(autoincrement())
-  name          String   @db.VarChar(255)
-  setupComplete Boolean  @default(false)
-  createdAt     DateTime @default(now())
-  updatedAt     DateTime @updatedAt
+  id                BigInt            @id @default(autoincrement())
+  name              String            @db.VarChar(255)
+  setupComplete     Boolean           @default(false)
+  workflowReadiness WorkflowReadiness @default(DRAFT)
+  createdAt         DateTime          @default(now())
+  updatedAt         DateTime          @updatedAt
 
   teams               Team[]
   roles               ProjectRole[]
-  taskStatuses        TaskStatus[]
+  workflowStages      WorkflowStage[]
   workflowTransitions WorkflowTransition[]
+  projectEventMaps    ProjectEventMap[]
+  projectMembers     ProjectMember[]
 
   @@map("projects")
 }
@@ -198,6 +235,7 @@ model Team {
   tasks              Task[]
   githubRepositories GitHubRepository[]
   chatMessages       ChatMessage[]
+  workflowStages     WorkflowStage[]
 
   @@index([projectId])
   @@map("teams")
@@ -214,6 +252,7 @@ model ProjectRole {
   members         TeamMember[]
   rolePermissions RolePermission[]
   invitations     TeamInvitation[]
+  projectMembers  ProjectMember[]
 
   @@unique([projectId, name])
   @@index([projectId])
@@ -233,6 +272,24 @@ model RolePermission {
   @@index([roleId])
   @@index([permissionId])
   @@map("role_permissions")
+}
+
+model ProjectMember {
+  id        BigInt   @id @default(autoincrement())
+  projectId BigInt
+  userId    BigInt
+  roleId    BigInt
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  project Project     @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  user    User        @relation(fields: [userId], references: [id], onDelete: Cascade)
+  role    ProjectRole @relation(fields: [roleId], references: [id], onDelete: Restrict)
+
+  @@unique([projectId, userId])
+  @@index([projectId])
+  @@index([userId])
+  @@map("project_members")
 }
 
 model TeamMember {
@@ -297,24 +354,32 @@ model Sprint {
   @@map("sprints")
 }
 
-model TaskStatus {
-  id         BigInt             @id @default(autoincrement())
-  projectId  BigInt
-  name       String             @db.VarChar(100)
-  category   TaskStatusCategory
-  stageOrder Int                @default(0)
-  isTerminal Boolean            @default(false)
-  createdAt  DateTime           @default(now())
-  updatedAt  DateTime           @updatedAt
+model WorkflowStage {
+  id                     BigInt             @id @default(autoincrement())
+  projectId              BigInt
+  name                   String             @db.VarChar(100)
+  systemCategory         TaskStatusCategory
+  intentTag              String?            @db.VarChar(100)
+  positionOrder          Int                @default(0)
+  scopeType              ScopeType          @default(PROJECT)
+  teamId                 BigInt?
+  isBlocking             Boolean            @default(false)
+  requiresApprovalToExit Boolean            @default(false)
+  slaDurationMinutes     Int?
+  createdAt              DateTime           @default(now())
+  updatedAt              DateTime           @updatedAt
 
   project         Project              @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  team            Team?                @relation(fields: [teamId], references: [id], onDelete: SetNull)
   tasks           Task[]
-  fromTransitions WorkflowTransition[] @relation("FromStatus")
-  toTransitions   WorkflowTransition[] @relation("ToStatus")
+  fromTransitions WorkflowTransition[] @relation("FromStage")
+  toTransitions   WorkflowTransition[] @relation("ToStage")
+  decisionsFrom   AgentDecision[]      @relation("DecisionFromStage")
+  decisionsTo     AgentDecision[]      @relation("DecisionToStage")
 
-  @@unique([projectId, name])
+  @@unique([projectId, positionOrder])
   @@index([projectId])
-  @@map("task_status")
+  @@map("workflow_stages")
 }
 
 model Task {
@@ -325,14 +390,14 @@ model Task {
   description     String?
   priority        TaskPriority @default(MEDIUM)
   order           Float        @default(1000)
-  currentStatusId BigInt?
+  currentStageId  BigInt?
   assigneeId      BigInt?
   createdAt       DateTime     @default(now())
   updatedAt       DateTime     @updatedAt
 
   team          Team            @relation(fields: [teamId], references: [id], onDelete: Cascade)
   sprint        Sprint?         @relation(fields: [sprintId], references: [id], onDelete: SetNull)
-  currentStatus TaskStatus?     @relation(fields: [currentStatusId], references: [id])
+  currentStage  WorkflowStage?  @relation(fields: [currentStageId], references: [id])
   assignee      TeamMember?     @relation(fields: [assigneeId], references: [id])
   activities    TaskActivity[]
   decisions     AgentDecision[]
@@ -344,40 +409,47 @@ model Task {
 }
 
 model WorkflowTransition {
-  id                     BigInt             @id @default(autoincrement())
-  projectId              BigInt
-  fromStatusId           BigInt
-  toStatusId             BigInt
-  fromCategory           TaskStatusCategory
-  toCategory             TaskStatusCategory
-  priority               Int                @default(1)
-  requiresManualApproval Boolean            @default(false)
-  createdAt              DateTime           @default(now())
-  updatedAt              DateTime           @updatedAt
+  id                 BigInt        @id @default(autoincrement())
+  projectId          BigInt
+  fromStageId        BigInt
+  toStageId          BigInt
+  directionType      DirectionType
+  triggerType        TriggerType
+  githubEventType    String?       @db.VarChar(100)
+  requiredRole       String?       @db.VarChar(100)
+  conditions         Json          @default("[]")
+  postActions        Json          @default("[]")
+  priorityRank       Int           @default(1)
+  isActive           Boolean       @default(true)
+  createdAt          DateTime      @default(now())
+  updatedAt          DateTime      @updatedAt
 
-  project    Project               @relation(fields: [projectId], references: [id], onDelete: Cascade)
-  fromStatus TaskStatus            @relation("FromStatus", fields: [fromStatusId], references: [id])
-  toStatus   TaskStatus            @relation("ToStatus", fields: [toStatusId], references: [id])
-  conditions TransitionCondition[]
+  project          Project           @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  fromStage        WorkflowStage     @relation("FromStage", fields: [fromStageId], references: [id])
+  toStage          WorkflowStage     @relation("ToStage", fields: [toStageId], references: [id])
+  projectEventMaps ProjectEventMap[]
+  agentDecisions   AgentDecision[]   @relation("DecisionTransition")
 
   @@index([projectId])
-  @@index([fromStatusId])
+  @@index([fromStageId])
   @@map("workflow_transitions")
 }
 
-model TransitionCondition {
-  id            BigInt            @id @default(autoincrement())
-  transitionId  BigInt
-  conditionType ConditionType
-  operator      ConditionOperator @default(AND)
-  expectedValue String?           @db.VarChar(50)
-  createdAt     DateTime          @default(now())
-  updatedAt     DateTime          @updatedAt
+model ProjectEventMap {
+  id                 BigInt              @id @default(autoincrement())
+  projectId          BigInt
+  githubEventType    String              @db.VarChar(100)
+  fromCategoryHint   TaskStatusCategory?
+  transitionId       BigInt
+  confidenceWeight   Float               @default(1.0)
+  createdAt          DateTime            @default(now())
 
+  project    Project            @relation(fields: [projectId], references: [id], onDelete: Cascade)
   transition WorkflowTransition @relation(fields: [transitionId], references: [id], onDelete: Cascade)
 
+  @@index([projectId, githubEventType])
   @@index([transitionId])
-  @@map("transition_conditions")
+  @@map("project_event_map")
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -599,20 +671,29 @@ model NLPFeedback {
 // ─────────────────────────────────────────────────────────────────────────────
 
 model AgentDecision {
-  id              BigInt         @id @default(autoincrement())
-  taskId          BigInt
-  actionTaken     String         @db.VarChar(255)
-  reason          String
-  confidenceScore Float
-  inputSignals    Json           @default("{}")
-  decisionSource  DecisionSource
-  createdAt       DateTime       @default(now())
-  updatedAt       DateTime       @updatedAt
+  id               BigInt              @id @default(autoincrement())
+  taskId           BigInt
+  fromStageId      BigInt?
+  toStageId        BigInt?
+  transitionId     BigInt?
+  confidenceScore  Float
+  reasoning        String              @db.Text
+  correlationId    String?             @db.VarChar(255)
+  status           AgentDecisionStatus @default(PENDING_CONFIRMATION)
+  triggeredByEvent String?             @db.VarChar(100)
+  inputSignals     Json                @default("{}")
+  decisionSource   DecisionSource      @default(AI_MODEL)
+  createdAt        DateTime            @default(now())
+  updatedAt        DateTime            @updatedAt
 
-  task     Task               @relation(fields: [taskId], references: [id], onDelete: Cascade)
-  feedback DecisionFeedback[]
+  task       Task                @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  fromStage  WorkflowStage?      @relation("DecisionFromStage", fields: [fromStageId], references: [id])
+  toStage    WorkflowStage?      @relation("DecisionToStage", fields: [toStageId], references: [id])
+  transition WorkflowTransition? @relation("DecisionTransition", fields: [transitionId], references: [id])
+  feedback   DecisionFeedback[]
 
   @@index([taskId])
+  @@index([correlationId])
   @@map("agent_decisions")
 }
 

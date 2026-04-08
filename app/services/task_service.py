@@ -20,6 +20,7 @@ from app.repositories.rbac_repository import RBACRepository
 from app.services.email_service import send_task_assignment_email
 
 logger = logging.getLogger(__name__)
+UNSET: Any = object()
 
 
 class TaskService:
@@ -36,7 +37,7 @@ class TaskService:
         title: str,
         description: str | None = None,
         sprint_id: int | None = None,
-        current_status_id: int | None = None,
+        current_stage_id: int | None = None,
         assignee_id: int | None = None,
         priority: str | None = None,
         updater_id: int | None = None,
@@ -47,19 +48,19 @@ class TaskService:
         if not team:
             raise HTTPException(status_code=404, detail="Team not found")
 
-        # SAFETY NET: If no status provided, use the first status in the project workflow
-        if current_status_id is None:
-            statuses = await self._task_repo.list_statuses_by_project(team.projectId)
-            if statuses:
-                current_status_id = int(statuses[0].id)
-                logger.info("Auto-assigned default status %s from project %s to new task: %s", current_status_id, team.projectId, title)
+        # SAFETY NET: If no stage provided, use the first stage in the project workflow
+        if current_stage_id is None:
+            stages = await self._task_repo.list_statuses_by_project(team.projectId)
+            if stages:
+                current_stage_id = int(stages[0].id)
+                logger.info("Auto-assigned default stage %s from project %s to new task: %s", current_stage_id, team.projectId, title)
 
         task = await self._task_repo.create_task(
             team_id=team_id,
             title=title,
             description=description,
             sprint_id=sprint_id,
-            current_status_id=current_status_id,
+            current_stage_id=current_stage_id,
             assignee_id=assignee_id,
             priority=priority,
         )
@@ -83,10 +84,10 @@ class TaskService:
 
                     # Get status name
                     status_name = "To Do"
-                    if task.currentStatusId:
-                        curr_status = await self._db.taskstatus.find_unique(where={"id": task.currentStatusId})
-                        if curr_status:
-                            status_name = curr_status.name
+                    if task.currentStageId:
+                        curr_stage = await self._db.workflowstage.find_unique(where={"id": task.currentStageId})
+                        if curr_stage:
+                            status_name = curr_stage.name
 
                     # Get updater name
                     assigned_by = "Admin"
@@ -133,37 +134,38 @@ class TaskService:
     async def update_task(
         self,
         task_id: int,
-        title: str | None = None,
-        description: str | None = None,
-        sprint_id: int | None = None,
-        current_status_id: int | None = None,
-        assignee_id: int | None = None,
-        priority: str | None = None,
-        order: float | None = None,
+        title: str | Any = UNSET,
+        description: str | Any = UNSET,
+        sprint_id: int | Any = UNSET,
+        current_stage_id: int | Any = UNSET,
+        assignee_id: int | Any = UNSET,
+        priority: str | Any = UNSET,
+        order: float | Any = UNSET,
         updater_id: int | None = None,
     ) -> Task:
         task = await self.require_task(task_id)
         data: dict[str, Any] = {}
-        if title is not None:
+        if title is not UNSET:
             data["title"] = title
-        if description is not None:
+        if description is not UNSET:
             data["description"] = description
-        if sprint_id is not None:
+        if sprint_id is not UNSET:
             data["sprintId"] = sprint_id
-        if current_status_id is not None:
-            data["currentStatusId"] = current_status_id
-        if assignee_id is not None:
+        if current_stage_id is not UNSET:
+            data["currentStageId"] = current_stage_id
+        if assignee_id is not UNSET:
             data["assigneeId"] = assignee_id
-        if priority is not None:
+        if priority is not UNSET:
             data["priority"] = priority
-        if order is not None:
+        if order is not UNSET:
             data["order"] = order
         if not data:
             return task
 
         # Check if email needs to be sent
         trigger_email = (
-            assignee_id is not None 
+            assignee_id is not UNSET 
+            and assignee_id is not None
             and getattr(task, "assigneeId", None) != assignee_id
         )
 
@@ -188,10 +190,10 @@ class TaskService:
 
                     # Get status name
                     status_name = "To Do"
-                    if updated.currentStatusId:
-                        curr_status = await self._db.taskstatus.find_unique(where={"id": updated.currentStatusId})
-                        if curr_status:
-                            status_name = curr_status.name
+                    if updated.currentStageId:
+                        curr_stage = await self._db.workflowstage.find_unique(where={"id": updated.currentStageId})
+                        if curr_stage:
+                            status_name = curr_stage.name
 
                     # Get updater name
                     assigned_by = "Admin"
@@ -242,8 +244,8 @@ class TaskService:
         async with self._db.tx() as tx:
             task = await tx.task.update(
                 where={"id": task_id},
-                data={"currentStatusId": new_status_id},
-                include={"currentStatus": True},
+                data={"currentStageId": new_status_id},
+                include={"currentStage": True},
             )
             await tx.agentdecision.create(
                 data={
@@ -280,8 +282,8 @@ class TaskService:
         async with self._db.tx() as tx:
             task = await tx.task.update(
                 where={"id": task_id},
-                data={"currentStatusId": new_status_id},
-                include={"currentStatus": True},
+                data={"currentStageId": new_status_id},
+                include={"currentStage": True},
             )
             await tx.agentdecision.create(
                 data={
@@ -366,7 +368,7 @@ class TaskService:
 
     async def get_valid_transitions(self, task_id: int):
         task = await self.require_task(task_id)
-        if not task or not task.currentStatusId:
+        if not task or not task.currentStageId:
             return []
         
         # Resolve project from team
@@ -376,7 +378,7 @@ class TaskService:
 
         return await self._task_repo.get_valid_transitions_by_project(
             project_id=team.projectId,
-            from_status_id=task.currentStatusId,
+            from_status_id=task.currentStageId,
         )
 
     async def get_decisions_for_task(self, task_id: int) -> list[AgentDecision]:

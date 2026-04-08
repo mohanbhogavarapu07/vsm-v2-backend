@@ -112,13 +112,23 @@ def require_any_permission(*allowed_codes: str):
 
 async def get_current_user_permissions(
     x_user_id: int = Header(..., alias="X-User-ID", description="Authenticated user ID"),
-    team_id: int = Query(..., description="Team context"),
+    team_id: int | None = Query(None, description="Team context"),
+    project_id: int | None = Query(None, description="Project context"),
     db: Prisma = Depends(get_db),
 ) -> list[str]:
     """
-    Returns the full list of permissions for the caller in the given team.
+    Returns the full list of permissions for the caller in the given team OR project.
     Useful for frontend to build conditional UI.
     """
     from app.repositories.rbac_repository import RBACRepository
     repo = RBACRepository(db)
-    return await repo.get_user_permissions(x_user_id, team_id)
+    
+    if team_id is not None:
+        return await repo.get_user_permissions(x_user_id, team_id)
+    elif project_id is not None:
+        return await repo.get_project_permissions(x_user_id, project_id)
+    else:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Either team_id or project_id is required"
+        )

@@ -13,6 +13,7 @@ import enum
 
 class TaskStatusCategory(str, enum.Enum):
     BACKLOG = "BACKLOG"
+    TODO = "TODO"
     ACTIVE = "ACTIVE"
     REVIEW = "REVIEW"
     VALIDATION = "VALIDATION"

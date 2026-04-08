@@ -27,12 +27,11 @@ from app.schemas.rbac_schemas import (
     RoleCreateRequest, RoleUpdateRequest, RoleResponse,
     UserInviteRequest, InvitationAcceptRequest, MemberRoleUpdateRequest, TeamMemberDetailResponse,
     InvitationDetailsResponse, InvitationAcceptResponse,
-    TaskStatusCreateRequest, TaskStatusUpdateRequest, TaskStatusResponse,
-    WorkflowTransitionCreateRequest, WorkflowTransitionResponse,
+    InvitationDetailsResponse, InvitationAcceptResponse,
 )
 
 logger = logging.getLogger(__name__)
-router = APIRouter(tags=["rbac"], redirect_slashes=False)
+router = APIRouter(tags=["rbac"])
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -43,14 +42,15 @@ router = APIRouter(tags=["rbac"], redirect_slashes=False)
     "/projects",
     response_model=ProjectResponse,
     status_code=status.HTTP_201_CREATED,
-    summary="[Step 1] Create a project",
+    summary="[Step 1] Create a project (Boots Role, Member, Team, Workflow)",
 )
 async def create_project(
     payload: ProjectCreateRequest,
+    x_user_id: int = Header(..., alias="X-User-ID", description="Authenticated user ID"),
     db: Prisma = Depends(get_db),
 ):
     svc = RBACService(db)
-    return await svc.create_project(payload.name)
+    return await svc.create_project(payload.name, x_user_id)
 
 
 @router.get(
@@ -90,6 +90,30 @@ async def get_project(
 ):
     svc = RBACService(db)
     return await svc.get_project(project_id)
+
+
+@router.get(
+    "/projects/{project_id}/members",
+    summary="List all high-level project members",
+)
+async def list_project_members(
+    project_id: int = Path(...),
+    db: Prisma = Depends(get_db),
+):
+    svc = RBACService(db)
+    members = await svc.repo.get_project_members(project_id)
+    return [
+        {
+            "id": m.id,
+            "user_id": m.userId,
+            "role_id": m.roleId,
+            "email": m.user.email if m.user else None,
+            "name": m.user.name if m.user else None,
+            "role_name": m.role.name if m.role else None,
+            "created_at": m.createdAt,
+        }
+        for m in members
+    ]
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -259,124 +283,6 @@ async def delete_role(
 ):
     svc = RBACService(db)
     await svc.delete_role(project_id, role_id)
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# STEP 4 — CUSTOM WORKFLOW BOARD (Define board columns + transitions)
-# ─────────────────────────────────────────────────────────────────────────────
-
-@router.post(
-    "/projects/{project_id}/workflow/statuses",
-    response_model=TaskStatusResponse,
-    status_code=status.HTTP_201_CREATED,
-    summary="[Step 4] Create a project-level board column",
-)
-async def create_task_status(
-    project_id: int = Path(...),
-    payload: TaskStatusCreateRequest = ...,
-    db: Prisma = Depends(get_db),
-):
-    svc = RBACService(db)
-    return await svc.create_task_status(
-        project_id=project_id,
-        name=payload.name,
-        category=payload.category.value,
-        stage_order=payload.stage_order,
-        is_terminal=payload.is_terminal,
-    )
-
-
-@router.get(
-    "/projects/{project_id}/workflow/statuses",
-    response_model=list[TaskStatusResponse],
-    summary="Get all board columns for a project",
-)
-async def list_task_statuses(
-    project_id: int = Path(...),
-    db: Prisma = Depends(get_db),
-):
-    svc = RBACService(db)
-    return await svc.list_task_statuses(project_id)
-
-
-@router.patch(
-    "/projects/{project_id}/workflow/statuses/{status_id}",
-    response_model=TaskStatusResponse,
-    summary="Update a board column",
-)
-async def update_task_status(
-    project_id: int = Path(...),
-    status_id: int = Path(...),
-    payload: TaskStatusUpdateRequest = ...,
-    db: Prisma = Depends(get_db),
-):
-    svc = RBACService(db)
-    return await svc.update_task_status(
-        project_id, status_id, payload.name, payload.stage_order, payload.is_terminal
-    )
-
-
-@router.delete(
-    "/projects/{project_id}/workflow/statuses/{status_id}",
-    status_code=status.HTTP_204_NO_CONTENT,
-    summary="Delete a board column",
-)
-async def delete_task_status(
-    project_id: int = Path(...),
-    status_id: int = Path(...),
-    db: Prisma = Depends(get_db),
-):
-    svc = RBACService(db)
-    await svc.delete_task_status(project_id, status_id)
-
-
-@router.post(
-    "/projects/{project_id}/workflow/transitions",
-    response_model=WorkflowTransitionResponse,
-    status_code=status.HTTP_201_CREATED,
-    summary="Define allowed status movement",
-)
-async def create_workflow_transition(
-    project_id: int = Path(...),
-    payload: WorkflowTransitionCreateRequest = ...,
-    db: Prisma = Depends(get_db),
-):
-    svc = RBACService(db)
-    result = await svc.create_workflow_transition(
-        project_id=project_id,
-        from_status_id=payload.from_status_id,
-        to_status_id=payload.to_status_id,
-        requires_manual_approval=payload.requires_manual_approval,
-    )
-    return _serialize_transition(result)
-
-
-@router.get(
-    "/projects/{project_id}/workflow/transitions",
-    response_model=list[WorkflowTransitionResponse],
-    summary="List all allowed workflow transitions for a project",
-)
-async def list_workflow_transitions(
-    project_id: int = Path(...),
-    db: Prisma = Depends(get_db),
-):
-    svc = RBACService(db)
-    transitions = await svc.list_workflow_transitions(project_id)
-    return [_serialize_transition(t) for t in transitions]
-
-
-@router.delete(
-    "/projects/{project_id}/workflow/transitions/{transition_id}",
-    status_code=status.HTTP_204_NO_CONTENT,
-    summary="Remove a workflow transition rule",
-)
-async def delete_workflow_transition(
-    project_id: int = Path(...),
-    transition_id: int = Path(...),
-    db: Prisma = Depends(get_db),
-):
-    svc = RBACService(db)
-    await svc.delete_workflow_transition(project_id, transition_id)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -557,18 +463,4 @@ async def my_permissions(
     return {"permissions": permissions}
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# Internal helpers
-# ─────────────────────────────────────────────────────────────────────────────
 
-def _serialize_transition(t) -> dict:
-    return {
-        "id": t.id,
-        "projectId": t.projectId,
-        "fromStatusId": t.fromStatusId,
-        "toStatusId": t.toStatusId,
-        "requiresManualApproval": t.requiresManualApproval,
-        "from_status_name": t.fromStatus.name if hasattr(t, "fromStatus") and t.fromStatus else None,
-        "to_status_name": t.toStatus.name if hasattr(t, "toStatus") and t.toStatus else None,
-        "createdAt": t.createdAt,
-    }

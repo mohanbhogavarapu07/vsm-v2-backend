@@ -14,7 +14,7 @@ from fastapi.middleware.gzip import GZipMiddleware
 
 from app.config import get_settings
 from app.database import connect_prisma, disconnect_prisma
-from app.api.webhooks.github import router as github_router
+from app.routers.webhooks import router as webhooks_router
 from app.api.webhooks.chat import router as chat_router
 from app.api.webhooks.ci import router as ci_router
 from app.api.internal.tasks import router as tasks_router
@@ -78,16 +78,17 @@ def create_app() -> FastAPI:
     # ── CORS & Compression ─────────────────────────────────────────────────────
     app.add_middleware(
         CORSMiddleware,
-        allow_origins=cors_origins or ["*"],
+        allow_origins=["*"],  # During development, allow all origins to bypass local network issues
         allow_credentials=True,
         allow_methods=["*"],
-        allow_headers=["*", "ngrok-skip-browser-warning", "Authorization"],
+        allow_headers=["*", "ngrok-skip-browser-warning", "Authorization", "X-User-ID"],
+        expose_headers=["*"],
     )
     app.add_middleware(GZipMiddleware, minimum_size=500)
 
     # ── Routers ────────────────────────────────────────────────────────────────
     app.include_router(health_router)
-    app.include_router(github_router)
+    app.include_router(webhooks_router)
     app.include_router(chat_router)
     app.include_router(ci_router)
     app.include_router(tasks_router)
@@ -100,6 +101,9 @@ def create_app() -> FastAPI:
 
     from app.api.internal.users import router as users_router
     app.include_router(users_router)
+
+    from app.routers.workflow import router as workflow_router
+    app.include_router(workflow_router)
 
     @app.get("/", tags=["root"])
     async def root():

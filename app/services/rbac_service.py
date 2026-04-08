@@ -19,8 +19,23 @@ class RBACService:
 
     # ── Projects ──────────────────────────────────────────────────────────────
 
-    async def create_project(self, name: str):
-        return await self.repo.create_project(name)
+    async def create_project(self, name: str, creator_id: int):
+        # ── 1. Create Project ──
+        project = await self.repo.create_project(name)
+        
+        # ── 2. Create 'Scrum Master' role with HIGH access ──
+        # These match the constants in the frontend projectStore.ts
+        high_permissions = [
+            "READ_TASK", "CREATE_TASK", "UPDATE_TASK", "DELETE_TASK", 
+            "MANAGE_TEAM", "MANAGE_ROLES", "ASSIGN_TASKS"
+        ]
+        scrum_master_role = await self.create_role(project.id, "Scrum Master", high_permissions)
+        
+        # ── 3. Add creator to ProjectMember table (The Base Layer) ──
+        # This grants the creator access to the project and all future teams.
+        await self.repo.add_project_member(project.id, creator_id, scrum_master_role.id)
+        
+        return project
 
     async def list_projects(self, user_id: int | None = None):
         return await self.repo.list_projects(user_id)
@@ -54,7 +69,7 @@ class RBACService:
         # we try to assign them an 'Admin' role if one exists.
         if creator_user_id:
             roles = await self.repo.get_roles_by_project(project_id)
-            admin_role = next((r for r in roles if r.name.lower() in ["admin", "owner"]), None)
+            admin_role = next((r for r in roles if r.name.lower() in ["admin", "owner", "scrum master"]), None)
             if admin_role:
                 await self.repo.create_team_member(team.id, creator_user_id, admin_role.id)
             
@@ -91,6 +106,16 @@ class RBACService:
 
     async def create_role(self, project_id: int, name: str, permission_codes: list[str]):
         await self.get_project(project_id)
+        
+        # ── IDEMPOTENCY CHECK: return existing if name matches ────────────────────
+        existing_roles = await self.repo.get_roles_by_project(project_id)
+        existing = next((r for r in existing_roles if r.name == name), None)
+        if existing:
+            # Update permissions anyway to ensure consistency
+            perms = await self.repo.get_permissions_by_codes(permission_codes)
+            await self.repo.replace_role_permissions(existing.id, [int(p.id) for p in perms])
+            return existing
+
         perms = await self.repo.get_permissions_by_codes(permission_codes)
         if len(perms) != len(set(permission_codes)):
             found = {p.code for p in perms}
@@ -145,7 +170,7 @@ class RBACService:
           - No roles have been defined for this team yet (hard gate)
           - The given role_id does not belong to this team
         """
-        await self.get_team(team_id)
+        team = await self.get_team(team_id)
 
         # ── HARD GATE: project must have at least one role defined ────────────────
         existing_roles = await self.repo.get_roles_by_project(team.projectId)
@@ -256,6 +281,14 @@ class RBACService:
             raise HTTPException(status_code=409, detail="User is already a member of this team")
 
         await self.repo.mark_invitation_accepted(invitation_id)
+        
+        # ── TWO-TIER PROVISIONING ──
+        # 1. Ensure user is in ProjectMember table (Access Layer)
+        pm = await self.repo.get_project_member_by_user(team.projectId, user.id)
+        if not pm:
+            await self.repo.add_project_member(team.projectId, user.id, inv.roleId)
+            
+        # 2. Add user to TeamMember table (Grouping Layer)
         member = await self.repo.create_team_member(team_id, user.id, inv.roleId)
         return member, team.projectId
 
@@ -326,8 +359,8 @@ class RBACService:
             project_id=project_id,
             from_status_id=from_status_id,
             to_status_id=to_status_id,
-            from_category=from_status.category,
-            to_category=to_status.category,
+            from_category=from_status.systemCategory,
+            to_category=to_status.systemCategory,
             requires_manual_approval=requires_manual_approval,
         )
 

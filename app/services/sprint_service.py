@@ -56,7 +56,7 @@ class SprintService:
         """Return a sprint with its tasks and status info (for stats)."""
         sprint = await self.db.sprint.find_first(
             where={"id": sprint_id, "teamId": team_id},
-            include={"tasks": {"include": {"currentStatus": True}}},
+            include={"tasks": {"include": {"currentStage": True}}},
         )
         if not sprint:
             raise HTTPException(status_code=404, detail="Sprint not found")
@@ -68,8 +68,13 @@ class SprintService:
         if not sprint_ids:
             return {}
             
-        statuses = await self.db.taskstatus.find_many(where={"teamId": team_id})
-        status_category_map = {st.id: st.category for st in statuses}
+        # Note: Stages are project-wide; resolve project_id from team_id
+        project_team = await self.db.team.find_unique(where={"id": team_id}, include={"project": True})
+        if not (project_team and project_team.project):
+            return {}
+        
+        stages = await self.db.workflowstage.find_many(where={"projectId": project_team.projectId})
+        status_category_map = {st.id: st.systemCategory for st in stages}
         
         tasks = await self.db.task.find_many(
             where={"sprintId": {"in": sprint_ids}, "teamId": team_id},
@@ -81,8 +86,8 @@ class SprintService:
             if not sid: continue
             
             cat = "BACKLOG"
-            if task.currentStatusId and task.currentStatusId in status_category_map:
-                cat = status_category_map[task.currentStatusId]
+            if task.currentStageId and task.currentStageId in status_category_map:
+                cat = status_category_map[task.currentStageId]
                 
             stats = stats_map[sid]
             stats.total += 1
@@ -99,7 +104,7 @@ class SprintService:
         """Return tasks for a team that are NOT assigned to any sprint."""
         return await self.db.task.find_many(
             where={"teamId": team_id, "sprintId": None},
-            include={"currentStatus": True, "assignee": {"include": {"user": True}}},
+            include={"currentStage": True, "assignee": {"include": {"user": True}}},
             order={"createdAt": "desc"},
             take=limit,
             skip=offset,
@@ -110,7 +115,7 @@ class SprintService:
         await self.require_sprint(sprint_id, team_id)
         return await self.db.task.find_many(
             where={"sprintId": sprint_id, "teamId": team_id},
-            include={"currentStatus": True, "assignee": {"include": {"user": True}}},
+            include={"currentStage": True, "assignee": {"include": {"user": True}}},
             order={"createdAt": "desc"},
         )
 
@@ -202,7 +207,7 @@ class SprintService:
           - If rollover_sprint_id is given: move incomplete tasks to that sprint.
           - Otherwise: move incomplete tasks back to backlog (sprintId=null).
 
-        'Incomplete' = any task whose currentStatus.category is NOT 'DONE'.
+        'Incomplete' = any task whose currentStage.systemCategory is NOT 'DONE'.
         """
         sprint = await self.require_sprint(sprint_id, team_id)
 
@@ -231,13 +236,13 @@ class SprintService:
         # Find all incomplete tasks in this sprint
         tasks_in_sprint = await self.db.task.find_many(
             where={"sprintId": sprint_id, "teamId": team_id},
-            include={"currentStatus": True},
+            include={"currentStage": True},
         )
 
         incomplete_task_ids = [
             t.id
             for t in tasks_in_sprint
-            if not t.currentStatus or t.currentStatus.category != "DONE"
+            if not t.currentStage or t.currentStage.systemCategory != "DONE"
         ]
 
         logger.info(
@@ -275,7 +280,7 @@ class SprintService:
         return await self.db.task.update(
             where={"id": task_id},
             data={"sprintId": sprint_id},
-            include={"currentStatus": True},
+            include={"currentStage": True},
         )
 
     async def unassign_task_from_sprint(self, task_id: int, team_id: int):
@@ -286,7 +291,7 @@ class SprintService:
         return await self.db.task.update(
             where={"id": task_id},
             data={"sprintId": None},
-            include={"currentStatus": True},
+            include={"currentStage": True},
         )
 
     # ─────────────────────────────────────────────────────────────────────────

@@ -16,7 +16,7 @@ from fastapi import APIRouter, Depends, Header, Path, Query, status
 from prisma import Prisma
 
 from app.database import get_db
-from app.services.task_service import TaskService
+from app.services.task_service import TaskService, UNSET
 from app.repositories.activity_repository import ActivityRepository
 from app.repositories.event_repository import EventRepository
 from app.utils.permissions import require_permission, require_any_permission
@@ -46,7 +46,7 @@ router = APIRouter(prefix="/tasks", tags=["tasks"], redirect_slashes=False)
 # ─────────────────────────────────────────────────────────────────────────────
 
 @router.post(
-    "/",
+    "",
     response_model=TaskSchema,
     status_code=status.HTTP_201_CREATED,
     summary="Create a new task [requires CREATE_TASK permission]",
@@ -63,7 +63,7 @@ async def create_task(
         title=payload.title,
         description=payload.description,
         sprint_id=payload.sprint_id,
-        current_status_id=payload.current_status_id,
+        current_stage_id=payload.current_stage_id,
         assignee_id=payload.assignee_id,
         priority=payload.priority,
         updater_id=x_user_id
@@ -72,7 +72,7 @@ async def create_task(
 
 
 @router.get(
-    "/",
+    "",
     response_model=list[TaskSchema],
     summary="List tasks for a team [requires READ_TASK permission]",
 )
@@ -87,100 +87,6 @@ async def list_tasks(
     tasks = await svc.list_tasks(team_id, limit, offset)
     return [TaskSchema.model_validate(t) for t in tasks]
 
-
-@router.get(
-    "/{task_id}",
-    response_model=TaskSchema,
-    summary="Get a task by ID [requires READ_TASK permission]",
-)
-async def get_task(
-    task_id: int = Path(...),
-    team_id: int = Query(..., description="Team ID for permission scope"),
-    _: None = Depends(require_permission("READ_TASK")),
-    db: Prisma = Depends(get_db),
-) -> TaskSchema:
-    svc = TaskService(db)
-    task = await svc.require_task(task_id)
-    return TaskSchema.model_validate(task)
-
-
-@router.patch(
-    "/{task_id}",
-    response_model=TaskSchema,
-    summary="Update a task [requires UPDATE_TASK permission]",
-)
-async def update_task(
-    task_id: int = Path(...),
-    payload: TaskUpdateRequest = ...,
-    team_id: int = Query(..., description="Team ID for permission scope"),
-    x_user_id: int = Header(..., alias="X-User-ID"),
-    _: None = Depends(require_permission("UPDATE_TASK")),
-    db: Prisma = Depends(get_db),
-) -> TaskSchema:
-    svc = TaskService(db)
-    task = await svc.update_task(
-        task_id=task_id,
-        title=payload.title,
-        description=payload.description,
-        sprint_id=payload.sprint_id,
-        current_status_id=payload.current_status_id,
-        assignee_id=payload.assignee_id,
-        priority=payload.priority,
-        order=payload.order,
-        updater_id=x_user_id
-    )
-    return TaskSchema.model_validate(task)
-
-
-@router.delete(
-    "/{task_id}",
-    status_code=status.HTTP_204_NO_CONTENT,
-    summary="Delete a task [requires DELETE_TASK permission]",
-)
-async def delete_task(
-    task_id: int = Path(...),
-    team_id: int = Query(..., description="Team ID for permission scope"),
-    _: None = Depends(require_permission("DELETE_TASK")),
-    db: Prisma = Depends(get_db),
-) -> None:
-    svc = TaskService(db)
-    await svc.delete_task(task_id)
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# STEP 2 — MANUAL STATUS TRANSITION (user-initiated drag/drop)
-# ─────────────────────────────────────────────────────────────────────────────
-
-@router.post(
-    "/{task_id}/transition",
-    response_model=TaskSchema,
-    status_code=status.HTTP_200_OK,
-    summary="Manual status transition [requires UPDATE_TASK permission]",
-    description=(
-        "User-initiated status override (e.g., drag-and-drop on Kanban board). "
-        "Records a RULE_ENGINE decision in the audit log. "
-        "Use `/tasks/agent/transition` for AI agent-initiated transitions."
-    ),
-)
-async def manual_transition(
-    task_id: int = Path(...),
-    payload: TaskStatusTransitionRequest = ...,
-    team_id: int = Query(..., description="Team ID for permission scope"),
-    _: None = Depends(require_permission("UPDATE_TASK")),
-    db: Prisma = Depends(get_db),
-) -> TaskSchema:
-    svc = TaskService(db)
-    task = await svc.manual_status_override(
-        task_id=task_id,
-        new_status_id=payload.new_status_id,
-        reason=payload.reason,
-    )
-    return TaskSchema.model_validate(task)
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# STEP 3 — AI TRANSITION (RBAC-protected; AI is a normal service-account user)
-# ─────────────────────────────────────────────────────────────────────────────
 
 @router.post(
     "/agent/transition",
@@ -236,6 +142,177 @@ async def agent_link(
         input_signals=payload.input_signals,
     )
     return result
+
+
+@router.get(
+    "/events",
+    status_code=status.HTTP_200_OK,
+    summary="List recent system events [requires READ_TASK permission]",
+)
+async def list_events(
+    team_id: int = Query(..., description="Team ID for permission scope"),
+    limit: int = Query(default=100, ge=1, le=500),
+    _: None = Depends(require_permission("READ_TASK")),
+    db: Prisma = Depends(get_db),
+) -> list[dict]:
+    repo = EventRepository(db)
+    items = await repo.list_recent_events(limit=limit)
+    return [
+        {
+            "id": e.id,
+            "event_type": e.eventType,
+            "source": e.source,
+            "reference_id": e.referenceId,
+            "metadata": e.payload,
+            "processed": e.processed,
+            "correlation_id": e.correlationId,
+            "created_at": e.ingestionTimestamp,
+            "timestamp": e.eventTimestamp,
+        }
+        for e in items
+    ]
+
+
+@router.get(
+    "/unlinked",
+    response_model=list[UnlinkedActivityResponse],
+    summary="List unlinked activities [requires MANAGE_TEAM permission]",
+    tags=["activity"],
+)
+async def list_unlinked(
+    team_id: int = Query(..., description="Team ID for permission scope"),
+    limit: int = Query(default=50, le=200),
+    _: None = Depends(require_permission("MANAGE_TEAM")),
+    db: Prisma = Depends(get_db),
+) -> list[UnlinkedActivityResponse]:
+    repo = ActivityRepository(db)
+    items = await repo.list_unresolved(limit)
+    return [UnlinkedActivityResponse.model_validate(i) for i in items]
+
+
+@router.post(
+    "/unlinked/{activity_id}/link",
+    status_code=status.HTTP_200_OK,
+    summary="Manually link an unlinked activity [requires MANAGE_TEAM permission]",
+    tags=["activity"],
+)
+async def link_activity(
+    activity_id: int = Path(...),
+    payload: LinkActivityRequest = ...,
+    team_id: int = Query(..., description="Team ID for permission scope"),
+    _: None = Depends(require_permission("MANAGE_TEAM")),
+    db: Prisma = Depends(get_db),
+) -> dict:
+    repo = ActivityRepository(db)
+    await repo.update_unlinked_suggestion(
+        ua_id=activity_id,
+        suggested_task_id=payload.task_id,
+        confidence_score=1.0,
+        status=UnlinkedActivityStatus.USER_CONFIRMED,
+    )
+    await repo.record_mapping(
+        activity_id=activity_id,
+        task_id=payload.task_id,
+        mapping_method=MappingMethod(payload.mapping_method),
+        confidence_score=1.0,
+    )
+    return {"status": "linked", "task_id": payload.task_id}
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# STEP 2 — TASK INSTANCE ENDPOINTS (dynamic {task_id})
+# ─────────────────────────────────────────────────────────────────────────────
+
+@router.get(
+    "/{task_id}",
+    response_model=TaskSchema,
+    summary="Get a task by ID [requires READ_TASK permission]",
+)
+async def get_task(
+    task_id: int = Path(...),
+    team_id: int = Query(..., description="Team ID for permission scope"),
+    _: None = Depends(require_permission("READ_TASK")),
+    db: Prisma = Depends(get_db),
+) -> TaskSchema:
+    svc = TaskService(db)
+    task = await svc.require_task(task_id)
+    return TaskSchema.model_validate(task)
+
+
+@router.patch(
+    "/{task_id}",
+    response_model=TaskSchema,
+    summary="Update a task [requires UPDATE_TASK permission]",
+)
+async def update_task(
+    task_id: int = Path(...),
+    payload: TaskUpdateRequest = ...,
+    team_id: int = Query(..., description="Team ID for permission scope"),
+    x_user_id: int = Header(..., alias="X-User-ID"),
+    _: None = Depends(require_permission("UPDATE_TASK")),
+    db: Prisma = Depends(get_db),
+) -> TaskSchema:
+    svc = TaskService(db)
+    updates = payload.model_dump(exclude_unset=True)
+    
+    task = await svc.update_task(
+        task_id=task_id,
+        title=updates.get("title", UNSET),
+        description=updates.get("description", UNSET),
+        sprint_id=updates.get("sprint_id", UNSET),
+        current_stage_id=updates.get("current_stage_id", UNSET),
+        assignee_id=updates.get("assignee_id", UNSET),
+        priority=updates.get("priority", UNSET),
+        order=updates.get("order", UNSET),
+        updater_id=x_user_id
+    )
+    return TaskSchema.model_validate(task)
+
+
+@router.delete(
+    "/{task_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    summary="Delete a task [requires DELETE_TASK permission]",
+)
+async def delete_task(
+    task_id: int = Path(...),
+    team_id: int = Query(..., description="Team ID for permission scope"),
+    _: None = Depends(require_permission("DELETE_TASK")),
+    db: Prisma = Depends(get_db),
+) -> None:
+    svc = TaskService(db)
+    await svc.delete_task(task_id)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# STEP 3 — STATUS TRANSITIONS
+# ─────────────────────────────────────────────────────────────────────────────
+
+@router.post(
+    "/{task_id}/transition",
+    response_model=TaskSchema,
+    status_code=status.HTTP_200_OK,
+    summary="Manual status transition [requires UPDATE_TASK permission]",
+    description=(
+        "User-initiated status override (e.g., drag-and-drop on Kanban board). "
+        "Records a RULE_ENGINE decision in the audit log. "
+        "Use `/tasks/agent/transition` for AI agent-initiated transitions."
+    ),
+)
+async def manual_transition(
+    task_id: int = Path(...),
+    payload: TaskStatusTransitionRequest = ...,
+    team_id: int = Query(..., description="Team ID for permission scope"),
+    _: None = Depends(require_permission("UPDATE_TASK")),
+    db: Prisma = Depends(get_db),
+) -> TaskSchema:
+    svc = TaskService(db)
+    task = await svc.manual_status_override(
+        task_id=task_id,
+        new_status_id=payload.new_status_id,
+        reason=payload.reason,
+    )
+    return TaskSchema.model_validate(task)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -339,80 +416,3 @@ async def reject_decision(
     return {"status": "recorded", "feedback": "REJECTED"}
 
 
-@router.get(
-    "/events",
-    status_code=status.HTTP_200_OK,
-    summary="List recent system events [requires READ_TASK permission]",
-)
-async def list_events(
-    team_id: int = Query(..., description="Team ID for permission scope"),
-    limit: int = Query(default=100, ge=1, le=500),
-    _: None = Depends(require_permission("READ_TASK")),
-    db: Prisma = Depends(get_db),
-) -> list[dict]:
-    repo = EventRepository(db)
-    items = await repo.list_recent_events(limit=limit)
-    return [
-        {
-            "id": e.id,
-            "event_type": e.eventType,
-            "source": e.source,
-            "reference_id": e.referenceId,
-            "metadata": e.payload,
-            "processed": e.processed,
-            "correlation_id": e.correlationId,
-            "created_at": e.ingestionTimestamp,
-            "timestamp": e.eventTimestamp,
-        }
-        for e in items
-    ]
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# STEP 5 — UNLINKED ACTIVITY MANAGEMENT (MANAGE_TEAM required)
-# ─────────────────────────────────────────────────────────────────────────────
-
-@router.get(
-    "/unlinked",
-    response_model=list[UnlinkedActivityResponse],
-    summary="List unlinked activities [requires MANAGE_TEAM permission]",
-    tags=["activity"],
-)
-async def list_unlinked(
-    team_id: int = Query(..., description="Team ID for permission scope"),
-    limit: int = Query(default=50, le=200),
-    _: None = Depends(require_permission("MANAGE_TEAM")),
-    db: Prisma = Depends(get_db),
-) -> list[UnlinkedActivityResponse]:
-    repo = ActivityRepository(db)
-    items = await repo.list_unresolved(limit)
-    return [UnlinkedActivityResponse.model_validate(i) for i in items]
-
-
-@router.post(
-    "/unlinked/{activity_id}/link",
-    status_code=status.HTTP_200_OK,
-    summary="Manually link an unlinked activity [requires MANAGE_TEAM permission]",
-    tags=["activity"],
-)
-async def link_activity(
-    activity_id: int = Path(...),
-    payload: LinkActivityRequest = ...,
-    team_id: int = Query(..., description="Team ID for permission scope"),
-    _: None = Depends(require_permission("MANAGE_TEAM")),
-    db: Prisma = Depends(get_db),
-) -> dict:
-    repo = ActivityRepository(db)
-    await repo.update_unlinked_suggestion(
-        ua_id=activity_id,
-        suggested_task_id=payload.task_id,
-        confidence_score=1.0,
-        status=UnlinkedActivityStatus.USER_CONFIRMED,
-    )
-    await repo.record_mapping(
-        activity_id=activity_id,
-        task_id=payload.task_id,
-        mapping_method=MappingMethod(payload.mapping_method),
-        confidence_score=1.0,
-    )
-    return {"status": "linked", "task_id": payload.task_id}

@@ -2,7 +2,7 @@
 VSM Backend – Task Pydantic Schemas
 
 Request/response models for internal task management endpoints.
-All field names align exactly with the Prisma schema (teamId).
+All field names align exactly with the Prisma schema.
 """
 
 from datetime import datetime
@@ -13,15 +13,15 @@ from pydantic import BaseModel, ConfigDict, Field
 from app.schemas.rbac_schemas import TaskStatusCategory
 
 
-# ── Task Status ───────────────────────────────────────────────────────────────
+# ── Workflow Stage ────────────────────────────────────────────────────────────
 
-class TaskStatusSchema(BaseModel):
+class WorkflowStageSchema(BaseModel):
     id: int
-    teamId: int
+    projectId: int
     name: str
-    category: TaskStatusCategory
-    stageOrder: int
-    isTerminal: bool
+    systemCategory: TaskStatusCategory
+    positionOrder: int
+    isBlocking: bool
     createdAt: datetime
     updatedAt: datetime
     model_config = ConfigDict(from_attributes=True)
@@ -34,15 +34,17 @@ class TaskSchema(BaseModel):
     teamId: int
     title: str
     description: str | None = None
-    sprintId: int | None = None
-    currentStatusId: int | None = None
-    assigneeId: int | None = None
+    sprint_id: int | None = Field(None, validation_alias="sprintId")
+    currentStageId: int | None = None
+    status_id: int | None = Field(None, validation_alias="currentStageId")
+    current_status_id: int | None = Field(None, validation_alias="currentStageId")
+    assignee_id: int | None = Field(None, validation_alias="assigneeId")
     priority: str | None = None
     order: float | None = None
     createdAt: datetime
     updatedAt: datetime
-    currentStatus: TaskStatusSchema | None = None
-    model_config = ConfigDict(from_attributes=True)
+    currentStage: WorkflowStageSchema | None = None
+    model_config = ConfigDict(from_attributes=True, populate_by_name=True)
 
 
 class TaskCreateRequest(BaseModel):
@@ -50,7 +52,7 @@ class TaskCreateRequest(BaseModel):
     title: str = Field(..., min_length=1, max_length=500)
     description: str | None = None
     sprint_id: int | None = None
-    current_status_id: int | None = None
+    current_stage_id: int | None = Field(None, alias="current_status_id")
     assignee_id: int | None = None
     priority: str | None = None
 
@@ -59,7 +61,7 @@ class TaskUpdateRequest(BaseModel):
     title: str | None = Field(None, min_length=1, max_length=500)
     description: str | None = None
     sprint_id: int | None = None
-    current_status_id: int | None = None
+    current_stage_id: int | None = Field(None, alias="current_status_id")
     assignee_id: int | None = None
     priority: str | None = None
     order: float | None = None
@@ -69,7 +71,7 @@ class TaskUpdateRequest(BaseModel):
 
 class TaskStatusTransitionRequest(BaseModel):
     """Manual status override — bypasses AI decision engine."""
-    new_status_id: int
+    new_stage_id: int = Field(..., alias="new_status_id")
     reason: str | None = None
 
 
@@ -138,12 +140,9 @@ class AgentLinkRequest(BaseModel):
 class AgentTransitionRequest(BaseModel):
     """
     Used by the AI agent to update task status.
-
-    The agent authenticates as a normal service-account user via `X-User-ID`
-    and must hold the same `UPDATE_TASK` permission as any human user.
     """
     task_id: int = Field(..., description="Task to transition")
-    new_status_id: int
+    new_stage_id: int = Field(..., alias="new_status_id")
     action_taken: str
     reason: str
     confidence_score: float
