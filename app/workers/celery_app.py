@@ -21,6 +21,7 @@ celery_app = Celery(
         "app.workers.nlp_worker",
         "app.workers.aggregation_worker",
         "app.workers.ai_trigger_worker",
+        "app.tasks.apply_decision_task",
     ],
 )
 
@@ -42,6 +43,7 @@ celery_app.conf.update(
         "app.workers.nlp_worker.*": {"queue": "nlp_processing"},
         "app.workers.aggregation_worker.*": {"queue": "aggregation"},
         "app.workers.ai_trigger_worker.*": {"queue": "ai_trigger"},
+        "app.tasks.apply_decision_task.*": {"queue": "ai_trigger"},
     },
 
     # ── Beat Schedule (periodic tasks) ───────────────────────────────────────

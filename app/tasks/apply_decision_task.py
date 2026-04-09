@@ -18,7 +18,11 @@ def _run_async(coro):
         asyncio.set_event_loop(loop)
     return loop.run_until_complete(coro)
 
-@celery_app.task(name="app.tasks.apply_decision_task.apply_agent_decision", bind=True)
+@celery_app.task(
+    name="app.tasks.apply_decision_task.apply_agent_decision", 
+    bind=True,
+    queue="ai_trigger"
+)
 def apply_agent_decision(self: Task, proposal: Dict[str, Any]):
     """
     Step 4: DECISION APPLICATION task.

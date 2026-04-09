@@ -184,7 +184,16 @@ async def _trigger_ai_inference(
             backoff = compute_retry_backoff(task_instance.request.retries)
             raise task_instance.retry(exc=exc, countdown=backoff)
 
-        # Execution is performed by vsm-ai-agent via RBAC-protected backend APIs.
+        # Dispatch the decision to the application task to actually execute the transition.
+        from app.tasks.apply_decision_task import apply_agent_decision
+        
+        try:
+            ai_result["taskId"] = task_id
+            apply_agent_decision.delay(ai_result)
+            logger.info("Successfully dispatched apply_agent_decision for correlation %s", correlation_id)
+        except Exception as dispatch_exc:
+            logger.exception("Failed to dispatch apply_agent_decision for correlation %s: %s", correlation_id, dispatch_exc)
+
         return {"status": "completed", "ai_result": ai_result}
 
 
@@ -196,4 +205,12 @@ def _extract_task_id_from_payload(payload: dict) -> int | None:
     title = pr.get("title", "")
     
     from app.workers.event_processor import _extract_task_id
-    return _extract_task_id(branch) or _extract_task_id(title)
+    
+    if task_id := _extract_task_id(branch) or _extract_task_id(title):
+        return task_id
+        
+    for commit in payload.get("commits", []):
+        if task_id := _extract_task_id(commit.get("message", "")):
+            return task_id
+            
+    return None
