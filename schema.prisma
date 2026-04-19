@@ -115,17 +115,11 @@ enum ActivityType {
   COMMENT
 }
 
-enum UnlinkedActivityType {
-  COMMIT
-  PR
+enum AuthProvider {
+  EMAIL
+  GOOGLE
 }
 
-enum UnlinkedActivityStatus {
-  UNRESOLVED
-  AUTO_LINKED
-  USER_CONFIRMED
-  IGNORED
-}
 
 enum DetectedIntent {
   BLOCKER
@@ -162,6 +156,7 @@ enum AgentDecisionStatus {
   NO_TRANSITION
   FUZZY_LINK
   PENDING_CONFIRMATION
+  RESOLVED_MANUALLY
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -169,24 +164,23 @@ enum AgentDecisionStatus {
 // ─────────────────────────────────────────────────────────────────────────────
 
 model User {
-  id             BigInt   @id @default(autoincrement())
-  email          String   @unique @db.VarChar(255)
-  name           String   @db.VarChar(255)
-  jobTitle       String?  @db.VarChar(100)
-  department     String?  @db.VarChar(100)
-  phone          String?  @db.VarChar(50)
-  bio            String?  @db.Text
-  bannerGradient String?  @db.VarChar(255)
-  createdAt      DateTime @default(now())
-  updatedAt      DateTime @updatedAt
+  id             BigInt       @id @default(autoincrement())
+  email          String       @unique @db.VarChar(255)
+  name           String       @db.VarChar(255)
+  authProvider   AuthProvider @default(EMAIL)
+  jobTitle       String?      @db.VarChar(100)
+  department     String?      @db.VarChar(100)
+  phone          String?      @db.VarChar(50)
+  bio            String?      @db.Text
+  bannerGradient String?      @db.VarChar(255)
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
 
   memberships        TeamMember[]
   projectMembers     ProjectMember[]
   invitationsSent    TeamInvitation[]   @relation("InvitationsSent")
   chatMessages       ChatMessage[]
   nlpFeedbacks       NLPFeedback[]
-  decisionFeedbacks  DecisionFeedback[]
-  unlinkedActivities UnlinkedActivity[]
 
   @@map("users")
 }
@@ -214,9 +208,7 @@ model Project {
   teams               Team[]
   roles               ProjectRole[]
   workflowStages      WorkflowStage[]
-  workflowTransitions WorkflowTransition[]
-  projectEventMaps    ProjectEventMap[]
-  projectMembers     ProjectMember[]
+  projectMembers      ProjectMember[]
 
   @@map("projects")
 }
@@ -236,6 +228,8 @@ model Team {
   githubRepositories GitHubRepository[]
   chatMessages       ChatMessage[]
   workflowStages     WorkflowStage[]
+  systemNotifications SystemNotification[]
+  systemBlockers      SystemBlocker[]
 
   @@index([projectId])
   @@map("teams")
@@ -372,8 +366,6 @@ model WorkflowStage {
   project         Project              @relation(fields: [projectId], references: [id], onDelete: Cascade)
   team            Team?                @relation(fields: [teamId], references: [id], onDelete: SetNull)
   tasks           Task[]
-  fromTransitions WorkflowTransition[] @relation("FromStage")
-  toTransitions   WorkflowTransition[] @relation("ToStage")
   decisionsFrom   AgentDecision[]      @relation("DecisionFromStage")
   decisionsTo     AgentDecision[]      @relation("DecisionToStage")
 
@@ -402,54 +394,12 @@ model Task {
   activities    TaskActivity[]
   decisions     AgentDecision[]
   nlpInsights   NLPInsight[]
+  systemNotifications SystemNotification[]
+  systemBlockers      SystemBlocker[]
 
   @@index([teamId])
   @@index([assigneeId])
   @@map("tasks")
-}
-
-model WorkflowTransition {
-  id                 BigInt        @id @default(autoincrement())
-  projectId          BigInt
-  fromStageId        BigInt
-  toStageId          BigInt
-  directionType      DirectionType
-  triggerType        TriggerType
-  githubEventType    String?       @db.VarChar(100)
-  requiredRole       String?       @db.VarChar(100)
-  conditions         Json          @default("[]")
-  postActions        Json          @default("[]")
-  priorityRank       Int           @default(1)
-  isActive           Boolean       @default(true)
-  createdAt          DateTime      @default(now())
-  updatedAt          DateTime      @updatedAt
-
-  project          Project           @relation(fields: [projectId], references: [id], onDelete: Cascade)
-  fromStage        WorkflowStage     @relation("FromStage", fields: [fromStageId], references: [id])
-  toStage          WorkflowStage     @relation("ToStage", fields: [toStageId], references: [id])
-  projectEventMaps ProjectEventMap[]
-  agentDecisions   AgentDecision[]   @relation("DecisionTransition")
-
-  @@index([projectId])
-  @@index([fromStageId])
-  @@map("workflow_transitions")
-}
-
-model ProjectEventMap {
-  id                 BigInt              @id @default(autoincrement())
-  projectId          BigInt
-  githubEventType    String              @db.VarChar(100)
-  fromCategoryHint   TaskStatusCategory?
-  transitionId       BigInt
-  confidenceWeight   Float               @default(1.0)
-  createdAt          DateTime            @default(now())
-
-  project    Project            @relation(fields: [projectId], references: [id], onDelete: Cascade)
-  transition WorkflowTransition @relation(fields: [transitionId], references: [id], onDelete: Cascade)
-
-  @@index([projectId, githubEventType])
-  @@index([transitionId])
-  @@map("project_event_map")
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -513,7 +463,7 @@ model EventAggregationWindow {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// GITHUB + UNLINKED ACTIVITY 
+// DATA MODELS
 // ─────────────────────────────────────────────────────────────────────────────
 
 model TaskActivity {
@@ -531,44 +481,6 @@ model TaskActivity {
   @@index([taskId])
   @@index([activityType])
   @@map("task_activity")
-}
-
-model UnlinkedActivity {
-  id              BigInt                 @id @default(autoincrement())
-  activityType    UnlinkedActivityType
-  referenceId     String?                @db.VarChar(255)
-  branchName      String?                @db.VarChar(255)
-  commitMessage   String?
-  authorId        BigInt?
-  suggestedTaskId BigInt?
-  confidenceScore Float?
-  status          UnlinkedActivityStatus @default(UNRESOLVED)
-  createdAt       DateTime               @default(now())
-  updatedAt       DateTime               @updatedAt
-
-  author     User?                    @relation(fields: [authorId], references: [id])
-  mappingLog ActivityTaskMappingLog[]
-
-  @@index([status])
-  @@index([branchName])
-  @@index([authorId])
-  @@map("unlinked_activity")
-}
-
-model ActivityTaskMappingLog {
-  id              BigInt        @id @default(autoincrement())
-  activityId      BigInt
-  taskId          BigInt
-  mappingMethod   MappingMethod
-  confidenceScore Float?
-  createdAt       DateTime      @default(now())
-  updatedAt       DateTime      @updatedAt
-
-  activity UnlinkedActivity @relation(fields: [activityId], references: [id], onDelete: Cascade)
-
-  @@index([activityId])
-  @@index([taskId])
-  @@map("activity_task_mapping_log")
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -675,7 +587,6 @@ model AgentDecision {
   taskId           BigInt
   fromStageId      BigInt?
   toStageId        BigInt?
-  transitionId     BigInt?
   confidenceScore  Float
   reasoning        String              @db.Text
   correlationId    String?             @db.VarChar(255)
@@ -689,25 +600,50 @@ model AgentDecision {
   task       Task                @relation(fields: [taskId], references: [id], onDelete: Cascade)
   fromStage  WorkflowStage?      @relation("DecisionFromStage", fields: [fromStageId], references: [id])
   toStage    WorkflowStage?      @relation("DecisionToStage", fields: [toStageId], references: [id])
-  transition WorkflowTransition? @relation("DecisionTransition", fields: [transitionId], references: [id])
-  feedback   DecisionFeedback[]
 
   @@index([taskId])
   @@index([correlationId])
   @@map("agent_decisions")
 }
 
-model DecisionFeedback {
-  id         BigInt         @id @default(autoincrement())
-  decisionId BigInt
-  userId     BigInt
-  feedback   FeedbackResult
-  createdAt  DateTime       @default(now())
-  updatedAt  DateTime       @updatedAt
 
-  decision AgentDecision @relation(fields: [decisionId], references: [id], onDelete: Cascade)
-  user     User          @relation(fields: [userId], references: [id])
+model SystemNotification {
+  id         BigInt   @id @default(autoincrement())
+  teamId     BigInt?
+  taskId     BigInt?
+  title      String   @db.VarChar(255)
+  message    String   @db.Text
+  type       String   @db.VarChar(50)
+  sourceType String   @default("INFO") @db.VarChar(50)
+  isRead     Boolean  @default(false)
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
 
-  @@index([decisionId])
-  @@map("decision_feedback")
+  team Team? @relation(fields: [teamId], references: [id], onDelete: Cascade)
+  task Task? @relation(fields: [taskId], references: [id], onDelete: Cascade)
+
+  @@index([teamId])
+  @@index([taskId])
+  @@index([isRead])
+  @@map("system_notifications")
+}
+
+model SystemBlocker {
+  id          BigInt   @id @default(autoincrement())
+  teamId      BigInt
+  taskId      BigInt?
+  title       String   @db.VarChar(255)
+  description String   @db.Text
+  type        String   @db.VarChar(50)
+  isResolved  Boolean  @default(false)
+  metadata    Json     @default("{}")
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  team Team  @relation(fields: [teamId], references: [id], onDelete: Cascade)
+  task Task? @relation(fields: [taskId], references: [id], onDelete: Cascade)
+
+  @@index([teamId])
+  @@index([isResolved])
+  @@map("system_blockers")
 }

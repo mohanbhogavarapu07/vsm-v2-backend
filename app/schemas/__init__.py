@@ -13,8 +13,6 @@ from app.schemas.task_schemas import (  # noqa: F401
     AgentDecisionSchema,
     DecisionFeedbackRequest,
     NLPFeedbackRequest,
-    UnlinkedActivityResponse,
-    LinkActivityRequest,
 )
 from app.schemas.event_schemas import (  # noqa: F401
     EventLogSchema,

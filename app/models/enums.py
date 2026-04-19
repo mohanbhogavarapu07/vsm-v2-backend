@@ -27,22 +27,6 @@ class SprintStatus(str, enum.Enum):
     COMPLETED = "COMPLETED"
 
 
-class ConditionType(str, enum.Enum):
-    PR_CREATED = "PR_CREATED"
-    PR_MERGED = "PR_MERGED"
-    CI_PASSED = "CI_PASSED"
-    CI_FAILED = "CI_FAILED"
-    COMMENT_ADDED = "COMMENT_ADDED"
-    QA_APPROVED = "QA_APPROVED"
-    DOCS_UPDATED = "DOCS_UPDATED"
-    SECURITY_SCAN_PASSED = "SECURITY_SCAN_PASSED"
-
-
-class ConditionOperator(str, enum.Enum):
-    AND = "AND"
-    OR = "OR"
-
-
 class EventType(str, enum.Enum):
     GIT_COMMIT = "GIT_COMMIT"
     PR_CREATED = "PR_CREATED"
@@ -75,18 +59,6 @@ class ActivityType(str, enum.Enum):
     PR = "PR"
     CI = "CI"
     COMMENT = "COMMENT"
-
-
-class UnlinkedActivityType(str, enum.Enum):
-    COMMIT = "COMMIT"
-    PR = "PR"
-
-
-class UnlinkedActivityStatus(str, enum.Enum):
-    UNRESOLVED = "UNRESOLVED"
-    AUTO_LINKED = "AUTO_LINKED"
-    USER_CONFIRMED = "USER_CONFIRMED"
-    IGNORED = "IGNORED"
 
 
 class DetectedIntent(str, enum.Enum):

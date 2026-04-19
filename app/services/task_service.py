@@ -250,14 +250,52 @@ class TaskService:
             await tx.agentdecision.create(
                 data={
                     "taskId": task_id,
-                    "actionTaken": "MANUAL_STATUS_OVERRIDE",
-                    "reason": reason or "Manual override by user",
+                    "toStageId": new_status_id,
+                    "reasoning": reason or "Manual override by user",
+                    "status": "APPLIED",
                     "confidenceScore": 1.0,
-                    "inputSignals": {},
+                    "inputSignals": "{}",
                     "decisionSource": DecisionSource.RULE_ENGINE.value,
                 }
             )
         logger.info("Manual override task=%s → status=%s", task_id, new_status_id)
+        return task
+
+    async def manual_resolve_decision(
+        self,
+        task_id: int,
+        decision_id: int,
+        new_status_id: int,
+        user_id: int | None = None,
+    ) -> Task:
+        """
+        Scrum Master manual resolution of an AI blocker/pending state.
+        Updates task status and marks the specific decision as RESOLVED_MANUALLY.
+        """
+        await self.require_task(task_id)
+        async with self._db.tx() as tx:
+            # 1. Update Task
+            task = await tx.task.update(
+                where={"id": task_id},
+                data={"currentStageId": new_status_id},
+                include={"currentStage": True},
+            )
+            # 2. Update Decision Status
+            await tx.agentdecision.update(
+                where={"id": decision_id},
+                data={"status": "RESOLVED_MANUALLY"}
+            )
+            # 3. Record Feedback
+            if user_id:
+                await tx.decisionfeedback.create(
+                    data={
+                        "decisionId": decision_id,
+                        "userId": user_id,
+                        "feedback": "ACCEPTED"
+                    }
+                )
+        
+        logger.info("Manual resolution applied for decision %s: status → %s", decision_id, new_status_id)
         return task
 
     # ── Agent-Privileged Transition ───────────────────────────────────────────
@@ -285,13 +323,15 @@ class TaskService:
                 data={"currentStageId": new_status_id},
                 include={"currentStage": True},
             )
+            import json
             await tx.agentdecision.create(
                 data={
                     "taskId": task_id,
-                    "actionTaken": action_taken,
-                    "reason": reason,
+                    "toStageId": new_status_id,
+                    "reasoning": reason,
+                    "status": "APPLIED" if new_status_id else "NO_TRANSITION",
                     "confidenceScore": confidence_score,
-                    "inputSignals": input_signals,
+                    "inputSignals": json.dumps(input_signals),
                     "decisionSource": DecisionSource.AI_MODEL.value,
                 }
             )
@@ -301,92 +341,22 @@ class TaskService:
         )
         return task
 
-    async def apply_agent_link(
-        self,
-        task_id: int,
-        event_log_ids: list[int],
-        confidence_score: float,
-        reason: str,
-        input_signals: dict,
-    ) -> dict:
-        """
-        AI agent-initiated task linking (Discovery Mode).
-        Links unlinked events/activities to a specific task.
-        """
-        from app.models.enums import ActivityType, UnlinkedActivityStatus
-        
-        await self.require_task(task_id)
-        
-        async with self._db.tx() as tx:
-            # 1. Record the AI decision for the link
-            await tx.agentdecision.create(
-                data={
-                    "taskId": task_id,
-                    "actionTaken": "SUGGEST_LINK",
-                    "reason": reason,
-                    "confidenceScore": confidence_score,
-                    "inputSignals": input_signals,
-                    "decisionSource": DecisionSource.AI_MODEL.value,
-                }
-            )
-            
-            # 2. Find and link activities
-            for el_id in event_log_ids:
-                event = await tx.eventlog.find_unique(where={"id": el_id})
-                if not event:
-                    continue
-                    
-                # Create the linked activity record
-                # Determine activity type from event payload
-                act_type = ActivityType.COMMIT
-                if "pull_request" in event.payload:
-                    act_type = ActivityType.PR
-                
-                await tx.taskactivity.create(
-                    data={
-                        "taskId": task_id,
-                        "activityType": act_type.value,
-                        "metadata": event.payload,
-                        "eventLogId": event.id,
-                        "referenceId": event.referenceId,
-                    }
-                )
-                
-                # Update any corresponding unlinked activity record
-                await tx.unlinkedactivity.update_many(
-                    where={"referenceId": event.referenceId},
-                    data={
-                        "status": UnlinkedActivityStatus.AUTO_LINKED.value,
-                        "suggestedTaskId": task_id,
-                        "confidenceScore": confidence_score,
-                    }
-                )
-        
-        return {"status": "linked", "task_id": task_id, "event_count": len(event_log_ids)}
-
-    # ── Decisions ─────────────────────────────────────────────────────────────
-
     async def get_valid_transitions(self, task_id: int):
+        """
+        Categorical transition helper. Since we've removed the explicit 
+        WorkflowTransition table, this returns all other stages in the project 
+        as potential targets for now.
+        """
         task = await self.require_task(task_id)
-        if not task or not task.currentStageId:
+        if not task or not task.teamId:
             return []
         
-        # Resolve project from team
         team = await self._rbac_repo.get_team(task.teamId)
         if not team:
             return []
 
-        return await self._task_repo.get_valid_transitions_by_project(
-            project_id=team.projectId,
-            from_status_id=task.currentStageId,
-        )
+        return await self._task_repo.list_statuses_by_project(team.projectId)
 
     async def get_decisions_for_task(self, task_id: int) -> list[AgentDecision]:
         return await self._task_repo.list_decisions_for_task(task_id)
 
-    async def record_decision_feedback(
-        self, decision_id: int, user_id: int, feedback: str
-    ):
-        return await self._task_repo.record_decision_feedback(
-            decision_id, user_id, FeedbackResult(feedback)
-        )

@@ -40,13 +40,17 @@ class EventService:
             ref=branch_name or reference_id or "",
         )
 
-        # Determine event type from payload shape
+        # Determine event type from payload shape + action
+        # GitHub sends pull_request objects for many actions (opened, synchronize,
+        # assigned, labeled, etc.). Only "opened" means a new PR was created.
         pr = payload.get("pull_request", {})
-        if pr and pr.get("merged"):
+        action = payload.get("action", "")
+        if pr and pr.get("merged") and action == "closed":
             event_type = EventType.PR_MERGED
-        elif pr:
+        elif pr and action == "opened":
             event_type = EventType.PR_CREATED
         else:
+            # Catches: push events, PR synchronize/assigned/labeled/etc.
             event_type = EventType.GIT_COMMIT
 
         event = await self._repo.create_event(

@@ -126,13 +126,16 @@ class GitHubService:
         github_cache.set(cache_key, result)
         return result
 
-    async def list_installation_repositories(self, installation_id: int) -> List[dict]:
+    async def list_installation_repositories(self, installation_id: int, bypass_cache: bool = False) -> List[dict]:
         """Lists all repositories accessible to a specific installation."""
         cache_key = f"gh_install_repos_{installation_id}"
-        cached = github_cache.get(cache_key)
-        if cached is not None:
-            logger.debug(f"Cache HIT: GitHub installation repositories {installation_id}")
-            return cached
+        if not bypass_cache:
+            cached = github_cache.get(cache_key)
+            if cached is not None:
+                logger.debug(f"Cache HIT: GitHub installation repositories {installation_id}")
+                return cached
+        else:
+            logger.info(f"Bypassing cache for GitHub installation repositories {installation_id}")
             
         token = await self.get_installation_token(installation_id)
         headers = {
@@ -216,8 +219,8 @@ class GitHubService:
             }
         )
 
-        # 3. Fetch all repositories
-        repos = await self.list_installation_repositories(installation_id)
+        # 3. Fetch all repositories (Bypass cache to ensure accurate pruning and sync)
+        repos = await self.list_installation_repositories(installation_id, bypass_cache=True)
         logger.info(f"Retrieved {len(repos)} repositories from GitHub for installation {installation_id}")
         
         synced_repos = []

@@ -94,8 +94,20 @@ def create_app() -> FastAPI:
     app.include_router(ci_router)
     app.include_router(tasks_router)
     app.include_router(rbac_router)
+    
+    from app.api.internal.sprints import router as sprints_router
     app.include_router(sprints_router)
+    
+    from app.api.internal.github_integration import router as github_integration_router
     app.include_router(github_integration_router)
+    from app.api.internal.events import router as events_router
+    app.include_router(events_router)
+
+    from app.api.internal.notifications import router as notifications_router
+    app.include_router(notifications_router)
+
+    from app.api.internal.analytics import router as analytics_router
+    app.include_router(analytics_router)
 
     from app.api.internal.auth import router as auth_router
     app.include_router(auth_router)

@@ -7,13 +7,14 @@ Uses get_db_context() which creates its own Prisma connection per worker call.
 
 import asyncio
 import logging
+import json
 
 from celery import Task
 
 from app.workers.celery_app import celery_app
 from app.config import get_settings
 from app.database import get_db_context
-from app.models.enums import EventType, ActivityType, UnlinkedActivityType, QueueStatus
+from app.models.enums import EventType, ActivityType, QueueStatus
 from app.repositories.event_repository import EventRepository
 from app.repositories.activity_repository import ActivityRepository
 from app.utils.retry import compute_retry_backoff
@@ -111,11 +112,20 @@ async def _process_event(task_instance: Task, event_id: int, queue_id: int) -> d
                         event_log_id=event.id,
                     )
                 else:
-                    await activity_repo.create_unlinked(
-                        activity_type=UnlinkedActivityType.PR,
-                        branch_name=branch,
-                        reference_id=pr_num,
-                    )
+                    # Create a SystemBlocker for the unlinked PR if we have a team
+                    if target_team_id:
+                        await db.systemblocker.create(
+                            data={
+                                "teamId": target_team_id,
+                                "title": f"Unlinked PR: {title}",
+                                "description": f"PR #{pr_num} was created on branch '{branch}' but could not be linked to any active task.",
+                                "type": "UNLINKED_CONTRIBUTION",
+                                "isResolved": False,
+                                "metadata": json.dumps({"pr_num": pr_num, "branch": branch, "event_id": event.id})
+                            }
+                        )
+                    else:
+                        logger.warning("PR %s is unlinked and no team context available. Blocker not created.", pr_num)
 
             elif event.eventType == EventType.GIT_COMMIT.value:
                 commits = payload.get("commits", [])
@@ -142,12 +152,20 @@ async def _process_event(task_instance: Task, event_id: int, queue_id: int) -> d
                             event_log_id=event.id,
                         )
                     else:
-                        await activity_repo.create_unlinked(
-                            activity_type=UnlinkedActivityType.COMMIT,
-                            branch_name=branch,
-                            commit_message=commit_msg,
-                            reference_id=commit.get("id"),
-                        )
+                        # Create a SystemBlocker for the unlinked commit if we have a team
+                        if target_team_id:
+                            await db.systemblocker.create(
+                                data={
+                                    "teamId": target_team_id,
+                                    "title": f"Unlinked Commit: {commit.get('id', '')[:7]}",
+                                    "description": f"A commit on branch '{branch}' by {commit.get('author', {}).get('name')} was detected without a valid Task ID.",
+                                    "type": "UNLINKED_CONTRIBUTION",
+                                    "isResolved": False,
+                                    "metadata": json.dumps({"commit_id": commit.get("id"), "branch": branch, "author": commit.get("author")})
+                                }
+                            )
+                        else:
+                            logger.warning("Commit %s is unlinked and no team context available.", commit.get("id"))
 
             elif event.eventType == EventType.CI_STATUS.value:
                 # CI status might also be linkable to tasks via branch names in payload

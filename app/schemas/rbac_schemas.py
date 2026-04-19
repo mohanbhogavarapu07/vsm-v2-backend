@@ -136,20 +136,3 @@ class TaskStatusResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
 
-# ── Custom Workflow: Transitions ──────────────────────────────────────────────
-
-class WorkflowTransitionCreateRequest(BaseModel):
-    from_status_id: int
-    to_status_id: int
-    requires_manual_approval: bool = False
-
-class WorkflowTransitionResponse(BaseModel):
-    id: int
-    projectId: int
-    fromStatusId: int
-    toStatusId: int
-    requiresManualApproval: bool
-    from_status_name: Optional[str] = None
-    to_status_name: Optional[str] = None
-    createdAt: datetime
-    model_config = ConfigDict(from_attributes=True)

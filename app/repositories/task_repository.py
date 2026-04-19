@@ -12,9 +12,7 @@ from prisma import Prisma, Json
 from prisma.models import (
     Task,
     WorkflowStage,
-    WorkflowTransition,
     AgentDecision,
-    DecisionFeedback,
 )
 
 from app.models.enums import TaskStatusCategory, DecisionSource, FeedbackResult
@@ -131,23 +129,6 @@ class TaskRepository:
             }
         )
 
-    # ── WorkflowTransition ─────────────────────────────────────────────────────
-
-    async def get_valid_transitions_by_project(
-        self, project_id: int, from_status_id: int
-    ) -> list[WorkflowTransition]:
-        """Returns valid transitions from current status, with conditions loaded."""
-        return await self._db.workflowtransition.find_many(
-            where={
-                "projectId": project_id,
-                "fromStageId": from_status_id,
-            },
-            include={
-                "toStage": True,
-            },
-            order={"priorityRank": "desc"},
-        )
-
     # ── AgentDecision ──────────────────────────────────────────────────────────
 
     async def record_decision(
@@ -177,6 +158,11 @@ class TaskRepository:
             where={"taskId": task_id},
             order={"createdAt": "desc"},
             take=limit,
+            include={
+                "task": True,
+                "fromStage": True,
+                "toStage": True,
+            },
         )
 
     async def get_decision_by_id(self, decision_id: int) -> AgentDecision | None:
@@ -184,15 +170,3 @@ class TaskRepository:
             where={"id": decision_id}
         )
 
-    # ── DecisionFeedback ────────────────────────────────────────────────────────
-
-    async def record_decision_feedback(
-        self, decision_id: int, user_id: int, feedback: FeedbackResult
-    ) -> DecisionFeedback:
-        return await self._db.decisionfeedback.create(
-            data={
-                "decisionId": decision_id,
-                "userId": user_id,
-                "feedback": feedback.value,
-            }
-        )

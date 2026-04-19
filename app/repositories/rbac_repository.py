@@ -336,38 +336,6 @@ class RBACRepository:
     async def delete_task_status(self, status_id: int):
         return await self.db.workflowstage.delete(where={"id": status_id})
 
-    # ── Workflow: Transitions ─────────────────────────────────────────────────
-
-    async def create_workflow_transition(
-        self,
-        project_id: int,
-        from_status_id: int,
-        to_status_id: int,
-        from_category: str,
-        to_category: str,
-        requires_manual_approval: bool = False,
-    ):
-        return await self.db.workflowtransition.create(
-            data={
-                "projectId": project_id,
-                "fromStageId": from_status_id,
-                "toStageId": to_status_id,
-                "requiresManualApproval": requires_manual_approval,
-                "directionType": "FORWARD",
-                "triggerType": "MANUAL",
-            }
-        )
-
-    async def list_workflow_transitions(self, project_id: int):
-        return await self.db.workflowtransition.find_many(
-            where={"projectId": project_id},
-            include={"fromStage": True, "toStage": True},
-            order={"priorityRank": "desc"},
-        )
-
-    async def delete_workflow_transition(self, transition_id: int):
-        return await self.db.workflowtransition.delete(where={"id": transition_id})
-
     # ── Permission Lookup (for middleware) ────────────────────────────────────
 
     async def get_user_permissions(self, user_id: int, team_id: int) -> list[str]:

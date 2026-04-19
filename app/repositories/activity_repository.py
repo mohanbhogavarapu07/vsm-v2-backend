@@ -1,8 +1,7 @@
 """
 VSM Backend – Activity Repository (Prisma)
 
-All DB interactions for TaskActivity, UnlinkedActivity,
-ActivityTaskMappingLog, ChatMessage, NLPInsight, and NLPFeedback.
+All DB interactions for TaskActivity, ChatMessage, NLPInsight, and NLPFeedback.
 """
 
 import logging
@@ -11,8 +10,6 @@ from typing import Any
 from prisma import Prisma, Json
 from prisma.models import (
     TaskActivity,
-    UnlinkedActivity,
-    ActivityTaskMappingLog,
     ChatMessage,
     NLPInsight,
     NLPFeedback,
@@ -20,8 +17,6 @@ from prisma.models import (
 
 from app.models.enums import (
     ActivityType,
-    UnlinkedActivityType,
-    UnlinkedActivityStatus,
     MappingMethod,
     DetectedIntent,
     FeedbackResult,
@@ -67,73 +62,6 @@ class ActivityRepository:
             take=limit,
         )
 
-    # ── UnlinkedActivity ──────────────────────────────────────────────────────
-
-    async def create_unlinked(
-        self,
-        activity_type: UnlinkedActivityType,
-        branch_name: str | None = None,
-        commit_message: str | None = None,
-        reference_id: str | None = None,
-        author_id: int | None = None,
-    ) -> UnlinkedActivity:
-        data: dict[str, Any] = {
-            "activityType": activity_type.value,
-            "status": UnlinkedActivityStatus.UNRESOLVED.value,
-        }
-        if branch_name:
-            data["branchName"] = branch_name
-        if commit_message:
-            data["commitMessage"] = commit_message
-        if reference_id:
-            data["referenceId"] = reference_id
-        if author_id:
-            data["authorId"] = author_id
-
-        return await self._db.unlinkedactivity.create(data=data)
-
-    async def list_unresolved(self, limit: int = 100) -> list[UnlinkedActivity]:
-        """Fetched by the AI resolver worker."""
-        return await self._db.unlinkedactivity.find_many(
-            where={"status": UnlinkedActivityStatus.UNRESOLVED.value},
-            order={"createdAt": "asc"},
-            take=limit,
-        )
-
-    async def update_unlinked_suggestion(
-        self,
-        ua_id: int,
-        suggested_task_id: int,
-        confidence_score: float,
-        status: UnlinkedActivityStatus,
-    ) -> None:
-        await self._db.unlinkedactivity.update(
-            where={"id": ua_id},
-            data={
-                "suggestedTaskId": suggested_task_id,
-                "confidenceScore": confidence_score,
-                "status": status.value,
-            },
-        )
-
-    # ── ActivityTaskMappingLog ────────────────────────────────────────────────
-
-    async def record_mapping(
-        self,
-        activity_id: int,
-        task_id: int,
-        mapping_method: MappingMethod,
-        confidence_score: float | None = None,
-    ) -> ActivityTaskMappingLog:
-        data: dict[str, Any] = {
-            "activityId": activity_id,
-            "taskId": task_id,
-            "mappingMethod": mapping_method.value,
-        }
-        if confidence_score is not None:
-            data["confidenceScore"] = confidence_score
-
-        return await self._db.activitytaskmappinglog.create(data=data)
 
     # ── ChatMessage ────────────────────────────────────────────────────────────
 

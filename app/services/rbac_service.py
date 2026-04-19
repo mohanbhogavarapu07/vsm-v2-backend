@@ -161,7 +161,7 @@ class RBACService:
 
     # ── Members ───────────────────────────────────────────────────────────────
 
-    async def invite_user(self, team_id: int, email: str, name: str, role_id: int, invited_by_user_id: int | None):
+    async def invite_user(self, team_id: int, email: str, name: str, role_id: int, invited_by_user_id: int | None, background_tasks=None):
         """
         STRICT ORDER ENFORCEMENT:
         Step 3 (roles) MUST be completed before Step 5 (invitations).
@@ -243,13 +243,25 @@ class RBACService:
             role_name = role.name if role else "Member"
 
             mail_svc = MailService()
-            await mail_svc.send_invitation_email(
-                to_email=email,
-                team_name=team_name,
-                role_name=role_name,
-                inviter_name=inviter_name,
-                invitation_id=inv.id
-            )
+            
+            # Use BackgroundTasks if available to prevent blocking the API response
+            if background_tasks:
+                background_tasks.add_task(
+                    mail_svc.send_invitation_email,
+                    to_email=email,
+                    team_name=team_name,
+                    role_name=role_name,
+                    inviter_name=inviter_name,
+                    invitation_id=inv.id
+                )
+            else:
+                await mail_svc.send_invitation_email(
+                    to_email=email,
+                    team_name=team_name,
+                    role_name=role_name,
+                    inviter_name=inviter_name,
+                    invitation_id=inv.id
+                )
         except Exception as e:
             logger.error(f"Failed to trigger invitation email: {e}")
 

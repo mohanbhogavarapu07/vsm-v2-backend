@@ -13,15 +13,11 @@ Python enums (for type hints and validation) are here:
 
 from app.models.enums import (  # noqa: F401
     TaskStatusCategory,
-    ConditionType,
-    ConditionOperator,
     EventType,
     EventSource,
     QueueStatus,
     WindowStatus,
     ActivityType,
-    UnlinkedActivityType,
-    UnlinkedActivityStatus,
     DetectedIntent,
     FeedbackResult,
     CorrectedIntent,
@@ -31,15 +27,11 @@ from app.models.enums import (  # noqa: F401
 
 __all__ = [
     "TaskStatusCategory",
-    "ConditionType",
-    "ConditionOperator",
     "EventType",
     "EventSource",
     "QueueStatus",
     "WindowStatus",
     "ActivityType",
-    "UnlinkedActivityType",
-    "UnlinkedActivityStatus",
     "DetectedIntent",
     "FeedbackResult",
     "CorrectedIntent",

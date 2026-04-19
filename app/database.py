@@ -15,6 +15,8 @@ Usage in Celery workers (sync context):
 import logging
 import os
 import sys
+import asyncio
+import random
 from contextlib import asynccontextmanager
 from typing import AsyncGenerator
 
@@ -22,8 +24,14 @@ from prisma import Prisma
 
 logger = logging.getLogger(__name__)
 
-# ── Singleton Prisma client ────────────────────────────────────────────────────
+# ── Singleton Prisma client (FastAPI) ──────────────────────────────────────────
 _prisma_client: Prisma | None = None
+
+# ── Singleton Prisma client (Celery Workers) ───────────────────────────────────
+# We keep a separate singleton for workers to ensure clear lifecycle management
+# in process-forked environments like Celery.
+_worker_prisma_client: Prisma | None = None
+_worker_prisma_loop: asyncio.AbstractEventLoop | None = None
 
 
 def _restore_real_stdio():
@@ -56,7 +64,7 @@ async def connect_prisma() -> None:
     global _prisma_client
     _prisma_client = Prisma()
     await _prisma_client.connect()
-    logger.info("Prisma client connected to Supabase")
+    logger.info("Prisma client connected to Supabase (FastAPI)")
 
 
 async def disconnect_prisma() -> None:
@@ -96,22 +104,74 @@ async def get_db() -> Prisma:
 async def get_db_context() -> AsyncGenerator[Prisma, None]:
     """
     Async context manager for use in Celery workers and scripts.
-    Creates its own Prisma connection, independent of the FastAPI singleton.
+    Maintains a persistent Prisma connection within the process to avoid
+    connection churn and heavy query-engine startup overhead.
 
-    Handles Celery's LoggingProxy stdout replacement that breaks
-    Prisma's subprocess spawning on Windows.
+    Includes exponential backoff with jitter to handle P1001 (pool saturation).
 
     Usage:
         async with get_db_context() as db:
             await db.eventlog.find_many(...)
     """
-    # Fix Celery's LoggingProxy before Prisma spawns its query engine
+    global _worker_prisma_client, _worker_prisma_loop
+    
+    # Update stdio for Celery
     _restore_real_stdio()
-
-    client = Prisma()
+    
     try:
-        await client.connect()
-        yield client
-    finally:
-        if client.is_connected():
-            await client.disconnect()
+        current_loop = asyncio.get_event_loop()
+    except RuntimeError:
+        # No loop in this thread, create one
+        current_loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(current_loop)
+
+    # 1. Loop Mismatch Guard
+    # If the singleton was created on a different event loop (e.g. after a
+    # Celery retry on a new thread), discard it and start fresh. Reusing a client
+    # bound to a dead loop causes the 'bound to a different event loop' RuntimeError.
+    if _worker_prisma_client is not None and _worker_prisma_loop is not current_loop:
+        logger.warning(
+            "Prisma worker client loop mismatch. Client loop: %s, Current loop: %s. Recreating client.",
+            id(_worker_prisma_loop), id(current_loop)
+        )
+        # Attempt a graceful disconnect if the old loop is somehow alive, 
+        # but usually we just drop it because the loop is often already closed/dead.
+        _worker_prisma_client = None
+        _worker_prisma_loop = None
+
+    if _worker_prisma_client is None:
+        _worker_prisma_client = Prisma()
+        _worker_prisma_loop = current_loop
+
+    max_retries = 5
+    base_delay = 1.0  # seconds
+
+    for attempt in range(max_retries):
+        try:
+            if not _worker_prisma_client.is_connected():
+                await _worker_prisma_client.connect()
+                logger.info("Worker Prisma client connected (Persistent)")
+            
+            yield _worker_prisma_client
+            return # Success, exit the loop after yielded content finishes
+
+        except Exception as e:
+            # P1001 is common when pgbouncer is full
+            error_str = str(e)
+            is_connection_error = "P1001" in error_str or "Can't reach database" in error_str
+            
+            if is_connection_error and attempt < max_retries - 1:
+                # Exponential backoff with jitter
+                delay = (base_delay * (2 ** attempt)) + (random.uniform(0, 1.0))
+                logger.warning(
+                    "Database connection failed (Attempt %d/%d). Retrying in %.2fs... Error: %s",
+                    attempt + 1, max_retries, delay, error_str
+                )
+                await asyncio.sleep(delay)
+            else:
+                logger.error("Persistent worker connection failed after %d attempts: %s", attempt + 1, e)
+                raise
+    
+    # We never actually disconnect here. The connection persists for the lifetime 
+    # of the worker process (Celery prefork worker or solo worker).
+

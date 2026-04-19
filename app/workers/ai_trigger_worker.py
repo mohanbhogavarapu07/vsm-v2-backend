@@ -118,6 +118,16 @@ async def _trigger_ai_inference(
 
         # ── Call vsm-ai-agent ──────────────────────────────────────────────────
         # Aligned with vsm-ai-agent InferRequest schema
+
+        # Pick the highest-priority event type from the window so that PR events
+        # are never masked by earlier GIT_COMMIT entries in the same aggregation window.
+        EVENT_PRIORITY = {"PR_MERGED": 3, "PR_CREATED": 2, "GIT_COMMIT": 1, "CI_STATUS": 0}
+        dominant_event_type = max(
+            (ev["event_type"] for ev in events_data),
+            key=lambda t: EVENT_PRIORITY.get(t, -1),
+            default="UNKNOWN"
+        )
+
         ai_payload = {
             "project_id": project_id,
             "team_id": team_id,
@@ -126,9 +136,17 @@ async def _trigger_ai_inference(
             "aggregated_events": events_data,
             "window_start": window_start,
             "window_end": window_end,
-            "github_event_type": events_data[0]["event_type"] if events_data else "UNKNOWN",
+            "github_event_type": dominant_event_type,
             "actor_github_login": events_data[0]["payload"].get("sender", {}).get("login", "unknown") if events_data else "unknown",
         }
+
+
+        logger.info(
+            "Dispatching to AI Agent: task_id=%s, correlation=%s, event_count=%d, first_type=%s",
+            task_id, correlation_id, len(events_data), ai_payload["github_event_type"]
+        )
+        for i, ev in enumerate(events_data):
+            logger.debug("Event[%d]: id=%s type=%s", i, ev["event_id"], ev["event_type"])
 
         try:
             async with httpx.AsyncClient(timeout=settings.ai_agent_timeout) as client:

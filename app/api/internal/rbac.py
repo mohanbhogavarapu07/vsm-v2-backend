@@ -17,7 +17,7 @@ Strict Order Flow enforced in service layer:
 import logging
 from typing import Optional
 
-from fastapi import APIRouter, Depends, Header, HTTPException, Path, Query, status
+from fastapi import APIRouter, Depends, Header, HTTPException, Path, Query, status, BackgroundTasks
 from prisma import Prisma
 
 from app.database import get_db
@@ -320,6 +320,7 @@ async def delete_role(
 async def invite_user(
     team_id: int = Path(...),
     payload: UserInviteRequest = ...,
+    background_tasks: BackgroundTasks = None,
     x_user_id: int = Header(..., alias="X-User-ID", description="Authenticated user ID"),
     _: None = Depends(require_permission("MANAGE_TEAM")),
     db: Prisma = Depends(get_db),
@@ -331,6 +332,7 @@ async def invite_user(
         name=payload.name,
         role_id=payload.role_id,
         invited_by_user_id=x_user_id if isinstance(x_user_id, int) else None,
+        background_tasks=background_tasks,
     )
     return {
         "message": "Invitation created successfully",

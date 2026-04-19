@@ -23,6 +23,7 @@ from app.repositories.activity_repository import ActivityRepository
 from app.repositories.event_repository import EventRepository
 from app.utils.permissions import require_permission, require_any_permission
 from app.utils.cache import task_cache, cached_response
+from app.services.blocker_service import BlockerService
 from app.schemas.task_schemas import (
     TaskSchema,
     TaskCreateRequest,
@@ -31,13 +32,9 @@ from app.schemas.task_schemas import (
     AgentDecisionSchema,
     DecisionFeedbackRequest,
     NLPFeedbackRequest,
-    UnlinkedActivityResponse,
-    LinkActivityRequest,
+    SystemBlockerSchema,
     AgentTransitionRequest,
-    AgentLinkRequest,
 )
-from app.models.enums import UnlinkedActivityStatus
-from app.models.enums import MappingMethod
 
 logger = logging.getLogger(__name__)
 
@@ -129,33 +126,6 @@ async def agent_transition(
     )
     return TaskSchema.model_validate(task)
 
-
-@router.post(
-    "/agent/link",
-    status_code=status.HTTP_200_OK,
-    summary="AI-initiated task linking [requires UPDATE_TASK permission]",
-    description=(
-        "Used by the AI agent when discovery mode identifies a task for unlinked events. "
-        "Atomically creates TaskActivity records and updates UnlinkedActivity status."
-    ),
-)
-async def agent_link(
-    payload: AgentLinkRequest,
-    _: None = Depends(require_permission("UPDATE_TASK")),
-    team_id: int = Query(..., description="Team ID for permission scope"),
-    db: Prisma = Depends(get_db),
-) -> dict:
-    svc = TaskService(db)
-    result = await svc.apply_agent_link(
-        task_id=payload.task_id,
-        event_log_ids=payload.event_log_ids,
-        confidence_score=payload.confidence_score,
-        reason=payload.reason,
-        input_signals=payload.input_signals,
-    )
-    return result
-
-
 @router.get(
     "/events",
     status_code=status.HTTP_200_OK,
@@ -193,50 +163,76 @@ async def list_events(
     return result
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+# STEP 2 — BLOCKERS (RBAC-protected)
+# ─────────────────────────────────────────────────────────────────────────────
+
 @router.get(
-    "/unlinked",
-    response_model=list[UnlinkedActivityResponse],
-    summary="List unlinked activities [requires MANAGE_TEAM permission]",
-    tags=["activity"],
+    "/blockers",
+    response_model=list[SystemBlockerSchema],
+    summary="List active blockers for a team [requires MANAGE_TEAM permission]",
+    tags=["blockers"],
 )
-async def list_unlinked(
+async def list_blockers(
     team_id: int = Query(..., description="Team ID for permission scope"),
-    limit: int = Query(default=50, le=200),
     _: None = Depends(require_permission("MANAGE_TEAM")),
     db: Prisma = Depends(get_db),
-) -> list[UnlinkedActivityResponse]:
-    repo = ActivityRepository(db)
-    items = await repo.list_unresolved(limit)
-    return [UnlinkedActivityResponse.model_validate(i) for i in items]
+) -> list[SystemBlockerSchema]:
+    svc = BlockerService(db)
+    items = await svc.list_active_blockers(team_id)
+    return [SystemBlockerSchema.model_validate(i) for i in items]
 
 
 @router.post(
-    "/unlinked/{activity_id}/link",
-    status_code=status.HTTP_200_OK,
-    summary="Manually link an unlinked activity [requires MANAGE_TEAM permission]",
-    tags=["activity"],
+    "/blockers/{blocker_id}/resolve",
+    response_model=SystemBlockerSchema,
+    summary="Mark a blocker as resolved [requires MANAGE_TEAM permission]",
+    tags=["blockers"],
 )
-async def link_activity(
-    activity_id: int = Path(...),
-    payload: LinkActivityRequest = ...,
+async def resolve_blocker(
+    blocker_id: int = Path(...),
     team_id: int = Query(..., description="Team ID for permission scope"),
     _: None = Depends(require_permission("MANAGE_TEAM")),
     db: Prisma = Depends(get_db),
-) -> dict:
-    repo = ActivityRepository(db)
-    await repo.update_unlinked_suggestion(
-        ua_id=activity_id,
-        suggested_task_id=payload.task_id,
-        confidence_score=1.0,
-        status=UnlinkedActivityStatus.USER_CONFIRMED,
+) -> SystemBlockerSchema:
+    svc = BlockerService(db)
+    result = await svc.resolve_blocker(blocker_id)
+    if not result:
+        from fastapi import HTTPException
+        raise HTTPException(status_code=404, detail="Blocker not found")
+    return SystemBlockerSchema.model_validate(result)
+
+
+@router.get(
+    "/decisions",
+    response_model=list[AgentDecisionSchema],
+    summary="List all AI decisions for a team [requires READ_TASK permission]",
+)
+async def get_team_decisions(
+    team_id: int = Query(..., description="Team ID for permission scope"),
+    _: None = Depends(require_permission("READ_TASK")),
+    db: Prisma = Depends(get_db),
+) -> list[AgentDecisionSchema]:
+    decisions = await db.agentdecision.find_many(
+        where={
+            "task": {
+                "is": {
+                    "teamId": team_id
+                }
+            }
+        },
+        include={"task": True},
+        order={"createdAt": "desc"},
+        take=50
     )
-    await repo.record_mapping(
-        activity_id=activity_id,
-        task_id=payload.task_id,
-        mapping_method=MappingMethod(payload.mapping_method),
-        confidence_score=1.0,
-    )
-    return {"status": "linked", "task_id": payload.task_id}
+    
+    results = []
+    for d in decisions:
+        schema = AgentDecisionSchema.model_validate(d)
+        if d.task:
+            schema.taskTitle = d.task.title
+        results.append(schema)
+    return results
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -341,7 +337,6 @@ async def manual_transition(
 
 @router.get(
     "/{task_id}/decisions",
-    response_model=list[AgentDecisionSchema],
     summary="List AI decisions for a task [requires READ_TASK permission]",
 )
 async def get_decisions(
@@ -349,10 +344,32 @@ async def get_decisions(
     team_id: int = Query(..., description="Team ID for permission scope"),
     _: None = Depends(require_permission("READ_TASK")),
     db: Prisma = Depends(get_db),
-) -> list[AgentDecisionSchema]:
+) -> list[dict]:
     svc = TaskService(db)
     decisions = await svc.get_decisions_for_task(task_id)
-    return [AgentDecisionSchema.model_validate(d) for d in decisions]
+    result = []
+    for d in decisions:
+        task = getattr(d, "task", None)
+        from_stage = getattr(d, "fromStage", None)
+        to_stage = getattr(d, "toStage", None)
+        result.append({
+            "id": d.id,
+            "task_id": d.taskId,
+            "task_title": task.title if task else None,
+            "from_stage_id": d.fromStageId,
+            "from_stage_name": from_stage.name if from_stage else None,
+            "to_stage_id": d.toStageId,
+            "to_stage_name": to_stage.name if to_stage else None,
+            "confidence_score": d.confidenceScore,
+            "reasoning": d.reasoning,
+            "status": d.status,
+            "decision_source": d.decisionSource,
+            "triggered_by_event": getattr(d, "triggeredByEvent", None),
+            "correlation_id": getattr(d, "correlationId", None),
+            "input_signals": d.inputSignals,
+            "created_at": d.createdAt,
+        })
+    return result
 
 
 @router.get(
@@ -382,57 +399,27 @@ async def get_task_activity(
 
 
 @router.post(
-    "/{task_id}/decisions/{decision_id}/feedback",
+    "/{task_id}/decisions/{decision_id}/resolve",
+    response_model=TaskSchema,
     status_code=status.HTTP_200_OK,
-    summary="Submit feedback on an AI decision [requires READ_TASK permission]",
+    summary="Manually resolve an AI decision [requires UPDATE_TASK permission]",
 )
-async def submit_decision_feedback(
-    decision_id: int = Path(...),
-    task_id: int = Path(...),
-    payload: DecisionFeedbackRequest = ...,
-    user_id: int = Query(..., description="User submitting feedback"),
-    team_id: int = Query(..., description="Team ID for permission scope"),
-    _: None = Depends(require_permission("READ_TASK")),
-    db: Prisma = Depends(get_db),
-) -> dict:
-    svc = TaskService(db)
-    await svc.record_decision_feedback(decision_id, user_id, payload.feedback)
-    return {"status": "recorded", "feedback": payload.feedback}
-
-
-@router.post(
-    "/{task_id}/decisions/{decision_id}/approve",
-    status_code=status.HTTP_200_OK,
-    summary="Approve AI decision [requires READ_TASK permission]",
-)
-async def approve_decision(
+async def resolve_decision(
     task_id: int = Path(...),
     decision_id: int = Path(...),
+    payload: TaskStatusTransitionRequest = ...,
     team_id: int = Query(..., description="Team ID for permission scope"),
-    x_user_id: int = Header(..., alias="X-User-ID", description="Authenticated user ID"),
-    _: None = Depends(require_permission("READ_TASK")),
+    x_user_id: int = Header(..., alias="X-User-ID"),
+    _: None = Depends(require_permission("UPDATE_TASK")),
     db: Prisma = Depends(get_db),
-) -> dict:
+) -> TaskSchema:
     svc = TaskService(db)
-    await svc.record_decision_feedback(decision_id, x_user_id, "ACCEPTED")
-    return {"status": "recorded", "feedback": "ACCEPTED"}
-
-
-@router.post(
-    "/{task_id}/decisions/{decision_id}/reject",
-    status_code=status.HTTP_200_OK,
-    summary="Reject AI decision [requires READ_TASK permission]",
-)
-async def reject_decision(
-    task_id: int = Path(...),
-    decision_id: int = Path(...),
-    team_id: int = Query(..., description="Team ID for permission scope"),
-    x_user_id: int = Header(..., alias="X-User-ID", description="Authenticated user ID"),
-    _: None = Depends(require_permission("READ_TASK")),
-    db: Prisma = Depends(get_db),
-) -> dict:
-    svc = TaskService(db)
-    await svc.record_decision_feedback(decision_id, x_user_id, "REJECTED")
-    return {"status": "recorded", "feedback": "REJECTED"}
+    task = await svc.manual_resolve_decision(
+        task_id=task_id,
+        decision_id=decision_id,
+        new_status_id=payload.new_stage_id,  # TaskStatusTransitionRequest uses new_stage_id (aliased to new_status_id)
+        user_id=x_user_id
+    )
+    return TaskSchema.model_validate(task)
 
 

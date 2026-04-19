@@ -57,51 +57,9 @@ class WorkflowStageResponse(BaseModel):
     requiresApprovalToExit: bool
     slaDurationMinutes: Optional[int]
 
-class WorkflowTransitionCreate(BaseModel):
-    fromStageId: int
-    toStageId: int
-    directionType: DirectionType
-    triggerType: TriggerType
-    githubEventType: Optional[str] = None
-    requiredRole: Optional[str] = None
-    conditions: List[Dict[str, Any]] = []
-    postActions: List[Dict[str, Any]] = []
-    priorityRank: int = 1
-    isActive: bool = True
-
-class WorkflowTransitionResponse(BaseModel):
-    model_config = ConfigDict(from_attributes=True)
-    id: int
-    projectId: int
-    fromStageId: int
-    toStageId: int
-    directionType: DirectionType
-    triggerType: TriggerType
-    githubEventType: Optional[str]
-    requiredRole: Optional[str]
-    conditions: List[Dict[str, Any]]
-    postActions: List[Dict[str, Any]]
-    priorityRank: int
-    isActive: bool
-    fromStageName: Optional[str] = None
-    toStageName: Optional[str] = None
-
 class WorkflowGraphResponse(BaseModel):
     stages: List[WorkflowStageResponse]
-    transitions: List[WorkflowTransitionResponse]
     readiness: WorkflowReadiness
-
-class WorkflowValidateRequest(BaseModel):
-    fromStageId: int
-    toStageId: int
-    triggerType: TriggerType
-    githubEventType: Optional[str] = None
-    actorRole: Optional[str] = None
-
-class WorkflowValidateResponse(BaseModel):
-    valid: bool
-    transitionId: Optional[str] = None
-    reason: Optional[str] = None
 
 class AgentDecisionResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
@@ -123,9 +81,8 @@ class AgentDecisionResponse(BaseModel):
 
 async def evaluate_and_update_workflow_readiness(project_id: int, db: Prisma):
     stages_count = await db.workflowstage.count(where={"projectId": project_id})
-    transitions_count = await db.workflowtransition.count(where={"projectId": project_id})
     
-    if stages_count >= 2 and transitions_count >= 1:
+    if stages_count >= 2:
         await db.project.update(
             where={"id": project_id},
             data={"workflowReadiness": WorkflowReadiness.ACTIVE}
@@ -199,62 +156,6 @@ async def classify_stage(
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
-@router.post("/{project_id}/transitions", response_model=WorkflowTransitionResponse)
-async def create_transition(
-    project_id: int = Path(...),
-    payload: WorkflowTransitionCreate = ...,
-    db: Prisma = Depends(get_db)
-):
-    from_stage = await db.workflowstage.find_unique(where={"id": payload.fromStageId})
-    to_stage = await db.workflowstage.find_unique(where={"id": payload.toStageId})
-    
-    if not from_stage or from_stage.projectId != project_id:
-        raise HTTPException(status_code=400, detail="fromStageId does not belong to this project")
-    if not to_stage or to_stage.projectId != project_id:
-        raise HTTPException(status_code=400, detail="toStageId does not belong to this project")
-        
-    existing = await db.workflowtransition.find_first(
-        where={
-            "projectId": project_id,
-            "fromStageId": payload.fromStageId,
-            "toStageId": payload.toStageId,
-            "triggerType": payload.triggerType
-        }
-    )
-    if existing:
-        raise HTTPException(status_code=400, detail="Duplicate transition combination")
-        
-    transition = await db.workflowtransition.create(
-        data={
-            "projectId": project_id,
-            "fromStageId": payload.fromStageId,
-            "toStageId": payload.toStageId,
-            "directionType": payload.directionType,
-            "triggerType": payload.triggerType,
-            "githubEventType": payload.githubEventType,
-            "requiredRole": payload.requiredRole,
-            "conditions": Json(payload.conditions),
-            "postActions": Json(payload.postActions),
-            "priorityRank": payload.priorityRank,
-            "isActive": payload.isActive
-        }
-    )
-    
-    await evaluate_and_update_workflow_readiness(project_id, db)
-    
-    # Return with resolved stage names
-    t_dict = transition.model_dump()
-    t_dict["fromStageName"] = from_stage.name
-    t_dict["toStageName"] = to_stage.name
-    
-    # Handle Json fields if Prisma returns string
-    if isinstance(t_dict.get('conditions'), str):
-        t_dict['conditions'] = json.loads(t_dict['conditions'])
-    if isinstance(t_dict.get('postActions'), str):
-        t_dict['postActions'] = json.loads(t_dict['postActions'])
-        
-    return t_dict
-
 @router.get("/{project_id}/workflow/graph", response_model=WorkflowGraphResponse)
 async def get_workflow_graph(
     project_id: int = Path(...),
@@ -265,52 +166,11 @@ async def get_workflow_graph(
         raise HTTPException(status_code=404, detail="Project not found")
         
     stages = await db.workflowstage.find_many(where={"projectId": project_id})
-    transitions = await db.workflowtransition.find_many(where={"projectId": project_id})
-    
-    stage_map = {s.id: s.name for s in stages}
-    parsed_transitions = []
-    
-    for t in transitions:
-        t_dict = t.model_dump()
-        if isinstance(t_dict.get('conditions'), str):
-            t_dict['conditions'] = json.loads(t_dict['conditions'])
-        if isinstance(t_dict.get('postActions'), str):
-            t_dict['postActions'] = json.loads(t_dict['postActions'])
             
-        t_dict["fromStageName"] = stage_map.get(t.fromStageId)
-        t_dict["toStageName"] = stage_map.get(t.toStageId)
-        parsed_transitions.append(t_dict)
-        
     return WorkflowGraphResponse(
         stages=stages,
-        transitions=parsed_transitions,
         readiness=project.workflowReadiness
     )
-
-@router.post("/{project_id}/workflow/validate", response_model=WorkflowValidateResponse)
-async def validate_transition(
-    project_id: int = Path(...),
-    payload: WorkflowValidateRequest = ...,
-    db: Prisma = Depends(get_db)
-):
-    transition = await db.workflowtransition.find_first(
-        where={
-            "projectId": project_id,
-            "fromStageId": payload.fromStageId,
-            "toStageId": payload.toStageId,
-            "triggerType": payload.triggerType
-        }
-    )
-    if not transition:
-        return WorkflowValidateResponse(valid=False, reason="No matching transition found")
-        
-    if payload.githubEventType and transition.githubEventType and payload.githubEventType != transition.githubEventType:
-        return WorkflowValidateResponse(valid=False, reason="githubEventType mismatch")
-        
-    if payload.actorRole and transition.requiredRole and payload.actorRole != transition.requiredRole:
-        return WorkflowValidateResponse(valid=False, reason="actorRole mismatch")
-        
-    return WorkflowValidateResponse(valid=True, transitionId=str(transition.id))
 
 @router.patch("/{project_id}/stages/{stage_id}", response_model=WorkflowStageResponse)
 async def update_stage(
@@ -379,13 +239,14 @@ async def delete_stage(
     await db.workflowstage.delete(where={"id": stage_id})
     await evaluate_and_update_workflow_readiness(project_id, db)
 
-@router.get("/{project_id}/agent-decisions", response_model=List[AgentDecisionResponse])
+@router.get("/{project_id}/agent-decisions")
 async def list_agent_decisions(
     project_id: int = Path(...),
     db: Prisma = Depends(get_db)
 ):
     """
     Fetch the decision audit feed for all tasks in this project.
+    Includes task ID, task title, from-stage and to-stage names.
     """
     decisions = await db.agentdecision.find_many(
         where={
@@ -395,18 +256,36 @@ async def list_agent_decisions(
                 }
             }
         },
-        include={"task": True},
+        include={
+            "task": True,
+            "fromStage": True,
+            "toStage": True,
+        },
         order={"createdAt": "desc"}
     )
-    
-    # Map task title into the response
+
     results = []
     for d in decisions:
-        d_dict = d.model_dump()
-        if d.task:
-            d_dict["taskTitle"] = d.task.title
-        results.append(d_dict)
-        
+        task = getattr(d, "task", None)
+        from_stage = getattr(d, "fromStage", None)
+        to_stage = getattr(d, "toStage", None)
+        results.append({
+            "id": d.id,
+            "task_id": d.taskId,
+            "task_title": task.title if task else None,
+            "from_stage_id": d.fromStageId,
+            "from_stage_name": from_stage.name if from_stage else None,
+            "to_stage_id": d.toStageId,
+            "to_stage_name": to_stage.name if to_stage else None,
+            "confidence_score": d.confidenceScore,
+            "reasoning": d.reasoning,
+            "status": d.status,
+            "decision_source": d.decisionSource,
+            "triggered_by_event": getattr(d, "triggeredByEvent", None),
+            "correlation_id": getattr(d, "correlationId", None),
+            "created_at": d.createdAt,
+        })
+
     return results
 
 
